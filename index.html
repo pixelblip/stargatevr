@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Stargate 48 — Voyage</title>
+  <title>Stargate 49 — Voyage</title>
   <script src="https://aframe.io/releases/1.5.0/aframe.min.js"></script>
   <style>
     html, body { margin: 0; height: 100%; overflow: hidden; background: #000; }
@@ -106,7 +106,7 @@
 <body>
   <div id="gate">
     <h1>Enter the Star Gate</h1>
-    <p class="sub">stargate48 · Quest needs HTTPS (not file://)</p>
+    <p class="sub">stargate49 · Quest: HTTPS + VR driven by headset frame loop</p>
     <div id="serveWarn" role="alert"></div>
     <div class="btns">
       <button type="button" id="btnFlat">Enter<small>fullscreen tunnel</small></button>
@@ -122,9 +122,8 @@
 
   <a-scene
     id="scene"
-    embedded
     background="color: #000000"
-    renderer="colorManagement: true; antialias: true; alpha: false"
+    renderer="colorManagement: true; antialias: false; alpha: false; highRefreshRate: true"
     vr-mode-ui="enabled: true"
     device-orientation-permission-ui="enabled: false"
     loading-screen="enabled: false"
@@ -158,8 +157,12 @@
       init: function () {
         this._map = null;
       },
-      tick: function () {
+      tick: function (t) {
         try {
+          // Quest WebXR often stops window.requestAnimationFrame — drive voyage here
+          if (typeof window.__stargateVoyageTick === 'function') {
+            window.__stargateVoyageTick(performance.now());
+          }
           const canvas = this.data.canvas || document.getElementById('view');
           if (!canvas) return;
           const mesh = this.el.getObject3D('mesh');
@@ -186,8 +189,8 @@
     });
 
     /**
-     * stargate48 — VR needs a secure origin (https / localhost), not file://.
-     * enterVR stays on the click gesture; Quest uses LAN HTTPS.
+     * stargate49 — Quest freeze fix: voyage steps on A-Frame/XR ticks (not only window rAF).
+     * enterVR() runs first on the click (before heavy startVoyage work).
      */
     (function () {
       const gate = document.getElementById('gate');
@@ -206,7 +209,7 @@
       const hostHint = (location.hostname && location.hostname !== 'localhost' && location.hostname !== '127.0.0.1')
         ? location.hostname
         : '192.168.1.76';
-      const httpsUrl = 'https://' + hostHint + ':8900/stargate48.html';
+      const httpsUrl = 'https://' + hostHint + ':8900/stargate49.html';
 
       function showOriginWarn(html) {
         if (!serveWarn) return;
@@ -498,8 +501,9 @@
 
       /** Draw a slit column from front (+ blended back during fade). */
       function resize() {
-        const w = SCAN_W;
-        const h = SCAN_H;
+        // Lower res in VR — Quest GPU is tight with canvas texture + XR
+        const w = (presentMode === 'vr') ? 960 : SCAN_W;
+        const h = (presentMode === 'vr') ? 540 : SCAN_H;
         if (view.width !== w || view.height !== h) {
           view.width = w;
           view.height = h;
@@ -531,53 +535,73 @@
         sceneEl.addEventListener('enter-vr', function () {
           document.body.classList.add('vr-immersive');
           display.hidden = true;
+          if (vrHint) vrHint.textContent = 'Immersive VR · voyage on headset loop';
+          // Resume audio after XR (Quest often suspends it)
+          try {
+            if (audio && audio.ctx && audio.ctx.state === 'suspended') audio.ctx.resume();
+          } catch (e) {}
+          startXrVoyageLoop();
         });
         sceneEl.addEventListener('exit-vr', function () {
           document.body.classList.remove('vr-immersive');
           if (presentMode === 'vr') {
             display.hidden = false;
             sizeDisplay();
+            requestAnimationFrame(frame);
           }
         });
       }
 
-      /** MUST run inside the user click — setTimeout breaks WebXR activation */
+      const vrHint = document.getElementById('vrHint');
+
+      /** MUST run inside the user click — before heavy work, and without await */
       function enterVrNow() {
         if (isFileOrigin || !isSecure) {
           console.warn('WebXR blocked: need https:// (or localhost), not file:// or plain http LAN');
           if (serveWarn) {
             serveWarn.style.display = 'block';
             serveWarn.innerHTML =
-              '<strong>VR blocked on this origin</strong><br>Open<code>' + httpsUrl + '</code>';
+              '<strong>VR blocked on this origin</strong><br>On Quest open<code>' + httpsUrl + '</code>' +
+              'Accept the certificate warning, then tap VR.';
           }
-          return;
+          return false;
         }
         bindVrListeners();
         display.hidden = false;
         document.body.classList.remove('vr-immersive');
+        if (vrHint) vrHint.textContent = 'Requesting immersive VR…';
         try {
           if (!navigator.xr) {
-            console.warn('WebXR not available in this browser');
-            return;
+            if (vrHint) vrHint.textContent = 'WebXR not available in this browser';
+            return false;
           }
           if (!sceneEl.enterVR) {
-            console.warn('A-Frame enterVR missing');
-            return;
+            if (vrHint) vrHint.textContent = 'A-Frame enterVR missing';
+            return false;
           }
           const p = sceneEl.enterVR();
           if (p && typeof p.then === 'function') {
             p.then(function () {
               document.body.classList.add('vr-immersive');
               display.hidden = true;
+              if (vrHint) vrHint.textContent = 'Immersive VR active';
+              startXrVoyageLoop();
             }).catch(function (err) {
-              console.warn('enterVR failed — voyage keeps playing on screen. Use the VR button.', err);
+              console.warn('enterVR failed', err);
               display.hidden = false;
               document.body.classList.remove('vr-immersive');
+              if (vrHint) {
+                vrHint.textContent = 'VR failed — tap the A-Frame VR button below. ' +
+                  (err && err.message ? err.message : '');
+              }
             });
           }
+          return true;
         } catch (err) {
           console.warn('enterVR threw', err);
           display.hidden = false;
+          if (vrHint) vrHint.textContent = 'VR error — use the button below';
+          return false;
         }
       }
 
@@ -1901,7 +1925,7 @@
 
       function presentToDisplay(srcCanvas, w, h) {
         if (presentMode === 'sbs') return;
-        if (presentMode === 'vr' && document.body.classList.contains('vr-immersive')) return;
+        if (presentMode === 'vr' && (document.body.classList.contains('vr-immersive') || (sceneEl && sceneEl.is && sceneEl.is('vr-mode')))) return;
         const dw = display.width;
         const dh = display.height;
         dctx.fillStyle = '#000';
@@ -1922,9 +1946,18 @@
         }
       }
 
-      function frame(now) {
+      let lastStepAt = -1;
+      let xrAnimHandle = 0;
+
+      function inImmersiveVr() {
+        return !!(sceneEl && sceneEl.is && sceneEl.is('vr-mode'));
+      }
+
+      /** One voyage frame. Safe to call from window rAF and A-Frame/XR ticks. */
+      function stepVoyage(now) {
         if (!running) return;
-        requestAnimationFrame(frame);
+        if (now - lastStepAt < 10) return;
+        lastStepAt = now;
 
         resize();
         const w = view.width;
@@ -2022,14 +2055,36 @@
         if (presentMode === 'sbs') {
           if (stereoSbs) stereoSbs.render();
         } else if (presentMode === 'vr') {
-          // Keep flat canvas painting too until / unless immersive VR sticks
-          if (!document.body.classList.contains('vr-immersive')) {
+          if (!inImmersiveVr() && !document.body.classList.contains('vr-immersive')) {
             presentToDisplay(view, w, h);
           }
           pushTexture();
         } else {
           presentToDisplay(view, w, h);
         }
+      }
+
+      window.__stargateVoyageTick = stepVoyage;
+
+      function frame(now) {
+        if (!running) return;
+        stepVoyage(now);
+        // In immersive VR, Quest throttles/stops window rAF — A-Frame tick + XR rAF take over
+        if (!inImmersiveVr()) requestAnimationFrame(frame);
+      }
+
+      function startXrVoyageLoop() {
+        try {
+          const renderer = sceneEl.renderer;
+          const session = renderer && renderer.xr && renderer.xr.getSession && renderer.xr.getSession();
+          if (!session || typeof session.requestAnimationFrame !== 'function') return;
+          const onXrFrame = function () {
+            if (!running || !inImmersiveVr()) return;
+            xrAnimHandle = session.requestAnimationFrame(onXrFrame);
+            stepVoyage(performance.now());
+          };
+          xrAnimHandle = session.requestAnimationFrame(onXrFrame);
+        } catch (e) {}
       }
 
       let audio = null;
@@ -2842,12 +2897,12 @@
       document.getElementById('btnSbs').addEventListener('click', function () { startVoyage('sbs'); });
       document.getElementById('btnVr').addEventListener('click', function () {
         if (isFileOrigin || !isSecure) {
-          enterVrNow(); // shows warn; do not start voyage into a frozen XR attempt
+          enterVrNow();
           return;
         }
-        startVoyage('vr');
-        // Same click tick — required for WebXR
+        // enterVR FIRST — same user gesture — before heavy voyage/audio setup
         enterVrNow();
+        startVoyage('vr');
       });
 
       window.addEventListener('resize', function () {
