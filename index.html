@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Stargate 52 — Voyage</title>
+  <title>Stargate 53 — Voyage</title>
   <script src="https://aframe.io/releases/1.5.0/aframe.min.js"></script>
   <style>
     html, body { margin: 0; height: 100%; overflow: hidden; background: #000; }
@@ -106,7 +106,7 @@
 <body>
   <div id="gate">
     <h1>Enter the Star Gate</h1>
-    <p class="sub">stargate52 · eye-level raised for flat / 3D</p>
+    <p class="sub">stargate53 · VR: inside the tunnel (not a flat screen)</p>
     <div id="serveWarn" role="alert"></div>
     <div class="btns">
       <button type="button" id="btnFlat">Enter<small>fullscreen tunnel</small></button>
@@ -123,78 +123,79 @@
   <a-scene
     id="scene"
     background="color: #000000"
+    fog="type: exponential; color: #000000; density: 0.045"
     renderer="colorManagement: true; antialias: false; alpha: false; highRefreshRate: true"
     vr-mode-ui="enabled: true"
     device-orientation-permission-ui="enabled: false"
     loading-screen="enabled: false"
     webxr="referenceSpaceType: local-floor; optionalFeatures: local-floor, bounded-floor"
   >
-    <!-- WORLD screen: direct child of scene — NOT under camera or rig -->
-    <a-plane
-      id="tube"
-      width="16"
-      height="9"
-      position="0 1.6 -3.4"
-      rotation="0 0 0"
-      material="shader: flat; color: #111; side: double"
-      world-fixed-screen="dist: 3.4; y: 1.6"
-      voyage-screen="canvas: #view"
-    ></a-plane>
-
     <a-entity id="rig" position="0 0 0">
       <a-camera
         id="cam"
         position="0 1.6 0"
         look-controls="enabled: true; pointerLockEnabled: false; magicWindowTrackingEnabled: false"
         wasd-controls="enabled: false"
-        fov="90"
-        near="0.05"
+        fov="95"
+        near="0.08"
         far="80"
-      ></a-camera>
+      >
+        <!-- Immersive wrap: you sit INSIDE the tube — voyage paints the walls -->
+        <a-entity immersive-voyage-tunnel="canvas: #view"></a-entity>
+      </a-camera>
     </a-entity>
     <a-sky color="#000000"></a-sky>
   </a-scene>
 
     <script>
     /**
-     * Pin the voyage screen in WORLD space every frame AFTER headset pose
-     * (tock). Parent must be a-scene — never camera/rig — or looking around
-     * drags the gate with your head.
+     * Build a surround tunnel around the headset so VR feels like flying
+     * inside the star gate — not watching a flat cinema screen in a void.
      */
-    AFRAME.registerComponent('world-fixed-screen', {
+    AFRAME.registerComponent('immersive-voyage-tunnel', {
       schema: {
-        dist: { type: 'number', default: 3.4 },
-        y: { type: 'number', default: 1.6 }
+        canvas: { type: 'selector' },
+        radius: { type: 'number', default: 3.2 },
+        length: { type: 'number', default: 32 }
       },
-      init: function () {
-        this._pinned = false;
-      },
-      tick: function () {
-        this.pin();
-      },
-      tock: function () {
-        // Runs after camera/XR pose — re-assert world pose so nothing overrides us
-        this.pin();
-      },
-      pin: function () {
-        const scene = this.el.sceneEl;
-        if (!scene) return;
-        if (this.el.parentNode !== scene) {
-          scene.appendChild(this.el);
-        }
-        const o3 = this.el.object3D;
-        o3.position.set(0, this.data.y, -this.data.dist);
-        o3.rotation.set(0, 0, 0);
-        o3.quaternion.set(0, 0, 0, 1);
-        o3.scale.set(1, 1, 1);
-        o3.updateMatrix();
-      }
-    });
-
-    AFRAME.registerComponent('voyage-screen', {
-      schema: { canvas: { type: 'selector' } },
       init: function () {
         this._map = null;
+        const r = this.data.radius;
+        const len = this.data.length;
+
+        // 1) Huge forward screen — fills the FOV so the voyage is the world ahead
+        const portal = document.createElement('a-plane');
+        portal.setAttribute('width', 14);
+        portal.setAttribute('height', 8);
+        portal.setAttribute('position', '0 0 -3.1');
+        portal.setAttribute('material', 'shader: flat; color: #ffffff; side: front; npot: true');
+        portal.classList.add('voyage-surf');
+        portal.classList.add('voyage-portal');
+        this.el.appendChild(portal);
+        this.portal = portal;
+
+        // 2) Tube around you — looking left/right still shows tunnel, not a void
+        const wall = document.createElement('a-cylinder');
+        wall.setAttribute('radius', r);
+        wall.setAttribute('height', len);
+        wall.setAttribute('open-ended', true);
+        wall.setAttribute('segments-radial', 64);
+        wall.setAttribute('segments-height', 1);
+        wall.setAttribute('rotation', '90 0 0');
+        wall.setAttribute('position', '0 0 ' + (-len * 0.28));
+        wall.setAttribute('material', 'shader: flat; color: #ffffff; side: back; npot: true');
+        wall.classList.add('voyage-surf');
+        this.el.appendChild(wall);
+        this.wall = wall;
+
+        // 3) Far throat disc deep in the tube
+        const end = document.createElement('a-circle');
+        end.setAttribute('radius', r * 0.95);
+        end.setAttribute('position', '0 0 ' + (-len * 0.28 - len * 0.5 + 0.2));
+        end.setAttribute('material', 'shader: flat; color: #ffffff; side: front; npot: true');
+        end.classList.add('voyage-surf');
+        this.el.appendChild(end);
+        this.end = end;
       },
       tick: function () {
         try {
@@ -203,8 +204,6 @@
           }
           const canvas = this.data.canvas || document.getElementById('view');
           if (!canvas) return;
-          const mesh = this.el.getObject3D('mesh');
-          if (!mesh || !mesh.material) return;
           const THREE = AFRAME.THREE;
           if (!this._map) {
             this._map = new THREE.CanvasTexture(canvas);
@@ -214,20 +213,33 @@
               this._map.encoding = THREE.sRGBEncoding;
             }
             this._map.flipY = true;
+            this._map.wrapS = THREE.ClampToEdgeWrapping;
+            this._map.wrapT = THREE.ClampToEdgeWrapping;
             this._map.minFilter = THREE.LinearFilter;
             this._map.magFilter = THREE.LinearFilter;
             this._map.generateMipmaps = false;
-            mesh.material.map = this._map;
-            mesh.material.color.set('#ffffff');
-            mesh.material.needsUpdate = true;
           }
           this._map.needsUpdate = true;
+
+          const surfs = this.el.querySelectorAll('.voyage-surf');
+          for (let i = 0; i < surfs.length; i++) {
+            const mesh = surfs[i].getObject3D('mesh');
+            if (!mesh || !mesh.material) continue;
+            if (mesh.material.map !== this._map) {
+              mesh.material.map = this._map;
+              mesh.material.color.set('#ffffff');
+              mesh.material.side = surfs[i] === this.wall ? THREE.BackSide : THREE.FrontSide;
+              mesh.material.transparent = false;
+              mesh.material.depthWrite = true;
+              mesh.material.needsUpdate = true;
+            }
+          }
         } catch (e) {}
       }
     });
 
     /**
-     * stargate51 — voyage screen is scene-rooted and world-pinned (not head-locked).
+     * stargate53 — VR is an immersive tube you sit inside (canvas on the walls).
      */
     (function () {
       const gate = document.getElementById('gate');
@@ -246,7 +258,7 @@
       const hostHint = (location.hostname && location.hostname !== 'localhost' && location.hostname !== '127.0.0.1')
         ? location.hostname
         : '192.168.1.76';
-      const httpsUrl = 'https://' + hostHint + ':8900/stargate52.html';
+      const httpsUrl = 'https://' + hostHint + ':8900/stargate53.html';
 
       function showOriginWarn(html) {
         if (!serveWarn) return;
