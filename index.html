@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Stargate 51 — Voyage</title>
+  <title>Stargate 52 — Voyage</title>
   <script src="https://aframe.io/releases/1.5.0/aframe.min.js"></script>
   <style>
     html, body { margin: 0; height: 100%; overflow: hidden; background: #000; }
@@ -106,7 +106,7 @@
 <body>
   <div id="gate">
     <h1>Enter the Star Gate</h1>
-    <p class="sub">stargate51 · VR gate locked in the room — look around freely</p>
+    <p class="sub">stargate52 · eye-level raised for flat / 3D</p>
     <div id="serveWarn" role="alert"></div>
     <div class="btns">
       <button type="button" id="btnFlat">Enter<small>fullscreen tunnel</small></button>
@@ -246,7 +246,7 @@
       const hostHint = (location.hostname && location.hostname !== 'localhost' && location.hostname !== '127.0.0.1')
         ? location.hostname
         : '192.168.1.76';
-      const httpsUrl = 'https://' + hostHint + ':8900/stargate51.html';
+      const httpsUrl = 'https://' + hostHint + ':8900/stargate52.html';
 
       function showOriginWarn(html) {
         if (!serveWarn) return;
@@ -271,6 +271,14 @@
 
       const SCAN_W = 1280;
       const SCAN_H = 720;
+      // Flat / SBS: raise the viewpoint so we look through the tunnel mid-line
+      // (canvas Y grows downward — larger cy = vanishing point lower on screen).
+      const VIEW_CY_FLAT = 0.58;
+      const VIEW_CY_VR = 0.5;
+      function viewCy(h) {
+        const frac = (presentMode === 'flat' || presentMode === 'sbs') ? VIEW_CY_FLAT : VIEW_CY_VR;
+        return h * frac;
+      }
       let presentMode = 'flat'; // flat | sbs | vr
 
       let bufA = document.createElement('canvas');
@@ -974,7 +982,7 @@
       function stampElectronic(ctx, w, h, elapsed) {
         if (!electro.length) return;
         const cx = w * 0.5;
-        const cy = h * 0.5;
+        const cy = viewCy(h);
         const half = w * 0.5;
         const minDim = Math.min(w, h);
         const r0 = minDim * 0.05;
@@ -1815,12 +1823,13 @@
           if (Math.random() < 0.28) triggerPlaneWhoosh(0.2 + rand(0.22));
         }
 
-        const horizon = Math.floor(h * 0.5);
+        const horizon = Math.floor(viewCy(h));
         drawDesertStars(ctx, w, h, horizon);
         drawDesertGround(ctx, w, h, horizon);
         drawCrystals(ctx, w, h, horizon, elapsed);
 
-        const vg = ctx.createRadialGradient(w * 0.5, h * 0.45, h * 0.25, w * 0.5, h * 0.5, h * 1.05);
+        const midY = viewCy(h);
+        const vg = ctx.createRadialGradient(w * 0.5, midY - h * 0.05, h * 0.25, w * 0.5, midY, h * 1.05);
         vg.addColorStop(0, 'rgba(0,0,0,0)');
         vg.addColorStop(1, 'rgba(0,0,0,0.42)');
         ctx.fillStyle = vg;
@@ -1891,7 +1900,7 @@
           dst.drawImage(src, 0, 0, w, h);
 
           const cx = w * 0.5;
-          const cy = h * 0.5;
+          const cy = viewCy(h);
           const rMax = Math.sqrt(cx * cx + cy * cy) + 1;
           const maxShift = w * SBS_MAX_SHIFT;
 
@@ -1932,7 +1941,8 @@
           const dw2 = sw * scale;
           const dh2 = sh * scale;
           const ox = x0 + (half - dw2) * 0.5;
-          const oy = (dh - dh2) * 0.5;
+          // Match flat mode: raise viewpoint so tunnel midline sits mid-frame
+          const oy = (dh - dh2) * 0.5 + dh * 0.045;
           ctx.drawImage(eyeCanvas, 0, 0, sw, sh, ox, oy, dw2, dh2);
           ctx.restore();
         }
@@ -1969,7 +1979,9 @@
         dctx.fillRect(0, 0, dw, dh);
         const scale = Math.max(dw / w, dh / h);
         const dw2 = w * scale, dh2 = h * scale;
-        dctx.drawImage(srcCanvas, (dw - dw2) * 0.5, (dh - dh2) * 0.5, dw2, dh2);
+        // Nudge frame down on flat so tunnel axis sits in the middle of the monitor
+        const yNudge = (presentMode === 'flat') ? dh * 0.045 : 0;
+        dctx.drawImage(srcCanvas, (dw - dw2) * 0.5, (dh - dh2) * 0.5 + yNudge, dw2, dh2);
       }
 
       function sizeDisplay() {
@@ -2045,9 +2057,10 @@
           dstCtx.fillRect(0, 0, w, h);
 
           dstCtx.save();
-          dstCtx.translate(w * 0.5, h * 0.5);
+          const midY = viewCy(h);
+          dstCtx.translate(w * 0.5, midY);
           dstCtx.scale(zoom, zoom);
-          dstCtx.translate(-w * 0.5, -h * 0.5);
+          dstCtx.translate(-w * 0.5, -midY);
           dstCtx.imageSmoothingEnabled = true;
           dstCtx.drawImage(src, 0, 0);
           dstCtx.restore();
@@ -2070,7 +2083,7 @@
           vctx.drawImage(bufB, 0, 0);
           hideInjection(vctx, w, h);
 
-          const vg = vctx.createRadialGradient(w * 0.5, h * 0.5, h * 0.38, w * 0.5, h * 0.5, h * 1.05);
+          const vg = vctx.createRadialGradient(w * 0.5, midY, h * 0.38, w * 0.5, midY, h * 1.05);
           vg.addColorStop(0, 'rgba(0,0,0,0)');
           vg.addColorStop(1, 'rgba(0,0,0,0.38)');
           vctx.fillStyle = vg;
