@@ -1,0 +1,2704 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Stargate 41 — Voyage</title>
+  <script src="https://aframe.io/releases/1.5.0/aframe.min.js"></script>
+  <style>
+    html, body { margin: 0; height: 100%; overflow: hidden; background: #000; }
+    #gate {
+      position: fixed; inset: 0; z-index: 30;
+      display: flex; flex-direction: column; align-items: center; justify-content: center;
+      gap: 1.6rem; background: #000; color: #c8c4b8; user-select: none;
+      font-family: "Courier New", Courier, monospace;
+      letter-spacing: 0.28em; text-transform: uppercase;
+    }
+    #gate[hidden] { display: none; }
+    #gate h1 { margin: 0; font-weight: 400; font-size: clamp(1rem, 3vw, 1.5rem); opacity: 0.85; }
+    #gate .sub { margin: 0; font-size: 0.65rem; letter-spacing: 0.18em; opacity: 0.4; }
+    #gate .btns { display: flex; flex-wrap: wrap; gap: 0.75rem; justify-content: center; }
+    #gate button {
+      font: inherit; letter-spacing: 0.2em; text-transform: uppercase;
+      background: rgba(0,0,0,0.7); color: #c8c4b8;
+      border: 1px solid rgba(200,196,184,0.4);
+      padding: 0.75rem 1.25rem; cursor: pointer; min-width: 7.5rem;
+    }
+    #gate button:hover { border-color: #ffe600; color: #ffe600; }
+    #gate button small { display: block; margin-top: 0.35rem; font-size: 0.55rem;
+      letter-spacing: 0.12em; opacity: 0.45; text-transform: none; }
+    #flash {
+      position: fixed; inset: 0; z-index: 25; pointer-events: none;
+      background: #fff; opacity: 0; mix-blend-mode: screen;
+    }
+    #display {
+      position: fixed; inset: 0; z-index: 5; width: 100%; height: 100%;
+      background: #000; object-fit: contain;
+    }
+    #display[hidden] { display: none; }
+    /* Offscreen scan buffer */
+    #view { position: absolute; left: -9999px; top: 0; }
+    #scene {
+      position: fixed; inset: 0; z-index: 4;
+      opacity: 0; pointer-events: none;
+    }
+    body.mode-vr #scene {
+      opacity: 1; pointer-events: auto; z-index: 6;
+    }
+    body.mode-sbs #display { display: none !important; }
+    #stereo-sbs {
+      position: fixed; inset: 0; z-index: 5; width: 100%; height: 100%;
+      background: #000; display: none; object-fit: fill;
+    }
+    body.mode-sbs #stereo-sbs { display: block !important; }
+    .a-enter-vr-button, .a-enter-ar-button {
+      font-family: "Courier New", Courier, monospace !important;
+      letter-spacing: 0.14em !important;
+      text-transform: uppercase !important;
+      background: rgba(0,0,0,0.72) !important;
+      border: 1px solid rgba(200,196,184,0.45) !important;
+      color: #c8c4b8 !important;
+      padding: 0.55rem 1rem !important;
+    }
+    body:not(.mode-vr) .a-enter-vr-button,
+    body:not(.mode-vr) .a-enter-ar-button {
+      display: none !important;
+    }
+    .a-enter-vr-button:hover {
+      border-color: #ffe600 !important;
+      color: #ffe600 !important;
+    }
+  </style>
+</head>
+<body>
+  <div id="gate">
+    <h1>Enter the Star Gate</h1>
+    <p class="sub">stargate41 · fixed SBS stereo · denser FX</p>
+    <div class="btns">
+      <button type="button" id="btnFlat">Enter<small>fullscreen tunnel</small></button>
+      <button type="button" id="btnSbs">3D<small>depth tunnel · SBS</small></button>
+      <button type="button" id="btnVr">VR<small>immersive headset</small></button>
+    </div>
+  </div>
+  <div id="flash"></div>
+  <canvas id="display" hidden></canvas>
+  <canvas id="stereo-sbs" hidden></canvas>
+
+  <a-scene
+    id="scene"
+    background="color: #000000"
+    renderer="colorManagement: true; antialias: true"
+    vr-mode-ui="enabled: true"
+    device-orientation-permission-ui="enabled: true"
+    loading-screen="enabled: false"
+  >
+    <a-assets>
+      <canvas id="view" width="1280" height="720"></canvas>
+    </a-assets>
+
+    <a-entity id="rig" position="0 1.5 0">
+      <a-camera
+        id="cam"
+        look-controls="enabled: true; pointerLockEnabled: false"
+        wasd-controls="enabled: false"
+        fov="90"
+        near="0.05"
+        far="80"
+      ></a-camera>
+    </a-entity>
+
+    <!-- True immersive tunnel in VR -->
+    <a-entity
+      id="tube"
+      geometry="primitive: cylinder; radius: 6; height: 28; segmentsRadial: 64; openEnded: true"
+      material="shader: flat; src: #view; side: back; npot: true"
+      position="0 1.5 0"
+      rotation="0 0 90"
+    ></a-entity>
+  </a-scene>
+
+  <script>
+    /**
+     * stargate41 — more weird outward effects (forks, ribbons, wall glyphs,
+     * art slits) still dim and born outside the void.
+     */
+    (function () {
+      const gate = document.getElementById('gate');
+      const view = document.getElementById('view');
+      const vctx = view.getContext('2d', { alpha: false });
+      const display = document.getElementById('display');
+      const dctx = display.getContext('2d', { alpha: false });
+      const flashEl = document.getElementById('flash');
+      const sceneEl = document.getElementById('scene');
+      let flashAmt = 0;
+      function punchFlash(a) { /* centre screen flashes spoil the void */ }
+
+      const SCAN_W = 1280;
+      const SCAN_H = 720;
+      let presentMode = 'flat'; // flat | sbs | vr
+
+      let bufA = document.createElement('canvas');
+      let bufB = document.createElement('canvas');
+      let aCtx = bufA.getContext('2d', { alpha: false });
+      let bCtx = bufB.getContext('2d', { alpha: false });
+
+      // Dual artwork plates for smooth crossfades
+      const artA = document.createElement('canvas');
+      const artB = document.createElement('canvas');
+      const artACtx = artA.getContext('2d', { alpha: false });
+      const artBCtx = artB.getContext('2d', { alpha: false });
+      let artFront = artA; // currently dominant
+      let artBack = artB;  // fading in
+      let artFrontCtx = artACtx;
+      let artBackCtx = artBCtx;
+      let artBlend = 1; // 1 = fully on front; during fade, draw back with rising alpha
+      let artFading = false;
+      const ART_BLEND_DUR = 3.2;
+      let artFadeT0 = 0;
+      const ART_W = 720;
+      const ART_H = 512;
+
+      let artScroll = 0;
+      let artScrollY = 0;
+      let running = false;
+      let t0 = 0;
+      let lastNow = 0;
+      let artGen = 0;
+      let nextArtAt = 0;
+      let styleId = 0;
+      let lastTraverseCol = 0;
+      const electro = []; // rays/beams/gates living briefly near centre before expand takes them
+      let nextElectroAt = 0.4;
+      let nextZoneAt = 6;
+      let zoneKind = 'sheets'; // rays | beams | grid | gates | pulse
+      const ZONE_CYCLE = ['sheets', 'jagged', 'beams', 'rings', 'forks', 'shards', 'ribbons', 'rays', 'gates', 'glyphs', 'sparks', 'veils', 'comets', 'jagged', 'sheets'];
+      let zoneIdx = 0;
+
+      let tintHue = 200;
+      let tintHueTarget = 200;
+
+      // Desert landscape phase (mountain2 incorporated)
+      let phase = 'tunnel'; // tunnel | desert
+      let nextDesertAt = 150 + Math.random() * 60; // ~2.5–3.5 min
+      let desertUntil = 0;
+      let desertStyle = 0;
+      let nextDesertArtAt = 0;
+      let camZ = 0;
+      let camX = 0;
+      let groundHue = 320;
+      let groundHueTarget = 320;
+      let desertInvert = 0;
+      let nextDesertInvertAt = 0;
+      let nextDesertPaletteAt = 0;
+      let nextCrystalAt = 0;
+      let lastDesertWhooshZ = 0;
+      let phaseFade = 0; // 0..1 whiteout during enter/exit
+      let phaseFadeDir = 0; // 1 entering desert mid, -1 leaving mid
+      const crystals = [];
+      const stars = [];
+      for (let si = 0; si < 220; si++) {
+        stars.push({
+          x: Math.random(),
+          y: Math.random() * 0.48,
+          s: 0.4 + Math.random() * 1.4,
+          a: 0.35 + Math.random() * 0.65
+        });
+      }
+      const TERRAIN_W = 512;
+      const TERRAIN_H = 512;
+      const terrainA = document.createElement('canvas');
+      const terrainB = document.createElement('canvas');
+      const terrainACtx = terrainA.getContext('2d', { alpha: false });
+      const terrainBCtx = terrainB.getContext('2d', { alpha: false });
+      let terrainFront = terrainA;
+      let terrainBack = terrainB;
+      let terrainFrontCtx = terrainACtx;
+      let terrainBackCtx = terrainBCtx;
+      let terrainBlend = 1;
+      let terrainFading = false;
+      let terrainFadeT0 = 0;
+      const TERRAIN_BLEND_DUR = 5.5;
+      const faceCan = document.createElement('canvas');
+      faceCan.width = 128;
+      faceCan.height = 128;
+      const faceCtx = faceCan.getContext('2d');
+      let faceReady = false;
+
+      function rand(n) { return Math.random() * n; }
+      function irand(n) { return (Math.random() * n) | 0; }
+
+      // Distinct plate styles so colour / pattern really change
+      function paintArtwork(style, ctx) {
+        ctx = ctx || artFrontCtx;
+        const canvas = ctx.canvas;
+        canvas.width = ART_W;
+        canvas.height = ART_H;
+        const bias = irand(360);
+        ctx.fillStyle = '#010105';
+        ctx.fillRect(0, 0, ART_W, ART_H);
+
+        style = style % 7;
+
+        if (style === 0) {
+          // Hot bands — warm / cool stripes
+          for (let i = 0; i < 80; i++) {
+            const y = rand(ART_H);
+            const hue = (bias + (i % 2 === 0 ? rand(50) : 180 + rand(50))) % 360;
+            ctx.fillStyle = 'hsla(' + hue + ',95%,' + (20 + rand(28)) + '%,' + (0.55 + rand(0.4)) + ')';
+            ctx.fillRect(0, y, ART_W, 2 + rand(14));
+          }
+          for (let i = 0; i < 12; i++) {
+            const y = rand(ART_H);
+            ctx.fillStyle = 'hsla(' + ((bias + 30) % 360) + ',100%,' + (35 + rand(15)) + '%,0.85)';
+            ctx.fillRect(0, y, ART_W, 8 + rand(20));
+          }
+        } else if (style === 1) {
+          // Cellular blotches
+          for (let i = 0; i < 45; i++) {
+            const x = rand(ART_W), y = rand(ART_H), r = 20 + rand(90);
+            const g = ctx.createRadialGradient(x, y, 0, x, y, r);
+            const hue = (bias + rand(120)) % 360;
+            g.addColorStop(0, 'hsla(' + hue + ',92%,' + (32 + rand(20)) + '%,0.95)');
+            g.addColorStop(0.6, 'hsla(' + ((hue + 60) % 360) + ',85%,22%,0.4)');
+            g.addColorStop(1, 'rgba(0,0,0,0)');
+            ctx.fillStyle = g;
+            ctx.fillRect(0, 0, ART_W, ART_H);
+          }
+          for (let i = 0; i < 100; i++) {
+            ctx.fillStyle = 'hsla(' + ((bias + rand(90)) % 360) + ',90%,' + (18 + rand(25)) + '%,0.5)';
+            ctx.fillRect(0, rand(ART_H), ART_W, 1 + rand(3));
+          }
+        } else if (style === 2) {
+          // Fine moiré grids
+          for (let i = 0; i < 200; i++) {
+            const hue = (bias + i * 3) % 360;
+            ctx.fillStyle = 'hsla(' + hue + ',88%,' + (14 + (i % 25)) + '%,' + (0.35 + (i % 5) * 0.1) + ')';
+            ctx.fillRect(0, (i / 200) * ART_H, ART_W, 1.5);
+          }
+          ctx.save();
+          ctx.translate(ART_W / 2, ART_H / 2);
+          ctx.rotate(0.08);
+          ctx.translate(-ART_W / 2, -ART_H / 2);
+          for (let i = 0; i < 160; i++) {
+            const hue = (bias + 90 + i * 4) % 360;
+            ctx.fillStyle = 'hsla(' + hue + ',90%,' + (16 + (i % 20)) + '%,0.3)';
+            ctx.fillRect(-20, (i / 160) * ART_H, ART_W + 40, 1);
+          }
+          ctx.restore();
+        } else if (style === 3) {
+          // Circuit / crystalline shards
+          ctx.globalCompositeOperation = 'lighter';
+          for (let i = 0; i < 70; i++) {
+            const hue = (bias + rand(100)) % 360;
+            ctx.strokeStyle = 'hsla(' + hue + ',100%,' + (30 + rand(25)) + '%,' + (0.4 + rand(0.5)) + ')';
+            ctx.lineWidth = 0.5 + rand(4);
+            ctx.beginPath();
+            let x = rand(ART_W), y = rand(ART_H);
+            ctx.moveTo(x, y);
+            for (let s = 0; s < 20; s++) {
+              if (Math.random() > 0.5) x += (Math.random() - 0.5) * 50;
+              else y += (Math.random() - 0.5) * 40;
+              ctx.lineTo(x, y);
+            }
+            ctx.stroke();
+          }
+          ctx.globalCompositeOperation = 'source-over';
+          for (let i = 0; i < 50; i++) {
+            ctx.fillStyle = 'hsla(' + ((bias + rand(60)) % 360) + ',95%,' + (22 + rand(20)) + '%,0.55)';
+            ctx.fillRect(0, rand(ART_H), ART_W, 2 + rand(6));
+          }
+        } else if (style === 4) {
+          // Neon blocks / stepped bands
+          for (let i = 0; i < 40; i++) {
+            const y = (i / 40) * ART_H + rand(8);
+            const hh = 6 + rand(18);
+            const hue = (bias + i * 41 + rand(30)) % 360;
+            ctx.fillStyle = 'hsla(' + hue + ',100%,' + (25 + rand(22)) + '%,0.9)';
+            ctx.fillRect(0, y, ART_W, hh);
+            ctx.fillStyle = 'hsla(' + ((hue + 180) % 360) + ',90%,' + (18 + rand(15)) + '%,0.5)';
+            ctx.fillRect(0, y + hh * 0.4, ART_W, hh * 0.25);
+          }
+          for (let i = 0; i < 30; i++) {
+            const x = rand(ART_W);
+            ctx.fillStyle = 'hsla(' + ((bias + rand(360)) % 360) + ',100%,40%,0.35)';
+            ctx.fillRect(x, 0, 2 + rand(6), ART_H);
+          }
+        } else if (style === 5) {
+          // Fractal mountain / horizon plates — recursive peaks + colour bands
+          for (let band = 0; band < 12; band++) {
+            const baseY = (band / 12) * ART_H;
+            const hue = (bias + band * 31) % 360;
+            ctx.fillStyle = 'hsla(' + hue + ',75%,' + (8 + band * 2.5) + '%,0.92)';
+            ctx.beginPath();
+            ctx.moveTo(0, ART_H);
+            for (let x = 0; x <= ART_W; x += 4) {
+              let n = 0, amp = 28, freq = 0.018;
+              for (let o = 0; o < 5; o++) {
+                n += Math.sin(x * freq + band * 1.7 + o) * amp;
+                amp *= 0.55;
+                freq *= 2.05;
+              }
+              ctx.lineTo(x, baseY + 30 + n);
+            }
+            ctx.lineTo(ART_W, ART_H);
+            ctx.closePath();
+            ctx.fill();
+          }
+          ctx.globalCompositeOperation = 'lighter';
+          for (let i = 0; i < 30; i++) {
+            ctx.fillStyle = 'hsla(' + ((bias + 180 + rand(60)) % 360) + ',100%,' + (25 + rand(25)) + '%,0.35)';
+            ctx.fillRect(0, rand(ART_H), ART_W, 1 + rand(3));
+          }
+          ctx.globalCompositeOperation = 'source-over';
+        } else {
+          // Plasma veins
+          ctx.globalCompositeOperation = 'lighter';
+          for (let i = 0; i < 25; i++) {
+            const hue = (bias + rand(80)) % 360;
+            const cx = rand(ART_W), cy = rand(ART_H), r = 40 + rand(80);
+            const g = ctx.createRadialGradient(cx, cy, 0, cx, cy, r);
+            g.addColorStop(0, 'hsla(' + hue + ',100%,50%,0.7)');
+            g.addColorStop(1, 'rgba(0,0,0,0)');
+            ctx.fillStyle = g;
+            ctx.fillRect(0, 0, ART_W, ART_H);
+          }
+          ctx.globalCompositeOperation = 'source-over';
+          for (let i = 0; i < 60; i++) {
+            ctx.fillStyle = 'hsla(' + ((bias + i * 7) % 360) + ',90%,' + (18 + rand(20)) + '%,0.6)';
+            ctx.fillRect(0, rand(ART_H), ART_W, 2 + rand(8));
+          }
+        }
+      }
+
+      function beginArtCrossfade(style, elapsed) {
+        // Keep current plate on artFront; paint next into artBack and blend in
+        paintArtwork(style, artBackCtx);
+        artFading = true;
+        artBlend = 0;
+        artFadeT0 = elapsed;
+        artGen += 1;
+        tintHueTarget = (tintHue + 20 + Math.random() * 50) % 360;
+      }
+
+      function updateArtBlend(elapsed) {
+        if (!artFading) {
+          artBlend = 1;
+          return;
+        }
+        const t = (elapsed - artFadeT0) / ART_BLEND_DUR;
+        if (t >= 1) {
+          artFading = false;
+          artBlend = 1;
+          const sw = artFront;
+          const swCtx = artFrontCtx;
+          artFront = artBack;
+          artFrontCtx = artBackCtx;
+          artBack = sw;
+          artBackCtx = swCtx;
+        } else {
+          artBlend = t * t * (3 - 2 * t);
+        }
+      }
+
+      /** Draw a slit column from front (+ blended back during fade). */
+      function resize() {
+        const w = SCAN_W;
+        const h = SCAN_H;
+        if (view.width !== w || view.height !== h) {
+          view.width = w;
+          view.height = h;
+        }
+        if (bufA.width === w && bufA.height === h) return;
+
+        const oldA = bufA;
+        bufA = document.createElement('canvas');
+        bufB = document.createElement('canvas');
+        bufA.width = w;
+        bufA.height = h;
+        bufB.width = w;
+        bufB.height = h;
+        aCtx = bufA.getContext('2d', { alpha: false });
+        bCtx = bufB.getContext('2d', { alpha: false });
+        aCtx.fillStyle = '#000';
+        aCtx.fillRect(0, 0, w, h);
+        bCtx.fillStyle = '#000';
+        bCtx.fillRect(0, 0, w, h);
+        if (oldA.width) aCtx.drawImage(oldA, 0, 0, w, h);
+      }
+
+      function pushTexture() {
+        const tube = document.getElementById('tube');
+        if (!tube) return;
+        const mesh = tube.getObject3D('mesh');
+        if (mesh && mesh.material && mesh.material.map) {
+          mesh.material.map.needsUpdate = true;
+        }
+      }
+
+      // Stretch one art column into a vertical slit, scrolling upward only
+      // (never reverses — keeps wall texture flowing past as we fly in).
+      function drawSlitCol(ctx, col, x, slitW, h, yScroll) {
+        col = ((col % ART_W) + ART_W) % ART_W;
+        const scrollPx = ((yScroll % ART_H) / ART_H) * h;
+        const a = ctx.globalAlpha;
+        function blit(src) {
+          ctx.drawImage(src, col, 0, 1, ART_H, x, -scrollPx, slitW, h);
+          ctx.drawImage(src, col, 0, 1, ART_H, x, -scrollPx + h, slitW, h);
+        }
+        blit(artFront);
+        if (artFading && artBlend > 0.01) {
+          ctx.globalAlpha = a * artBlend;
+          blit(artBack);
+          ctx.globalAlpha = a;
+        }
+      }
+
+      // Single corridor slit-scan: inject near the vanishing point only.
+      // Wider slits + a short fan of near-centre stamps so walls flare out sooner.
+      function stampCorridor(ctx, w, h) {
+        const cx = w * 0.5;
+        const slitW = Math.max(3, Math.round(w * 0.0065));
+        const gap = 1;
+        const leftX = Math.floor(cx - gap - slitW);
+        const rightX = Math.floor(cx + gap);
+
+        const col = Math.floor(artScroll);
+        const colL = ((col % ART_W) + ART_W) % ART_W;
+        const colR = ((col + Math.floor(ART_W * 0.41)) % ART_W + ART_W) % ART_W;
+
+        ctx.imageSmoothingEnabled = false;
+        drawSlitCol(ctx, colL, leftX, slitW, h, artScrollY);
+        drawSlitCol(ctx, colR, rightX, slitW, h, artScrollY * 1.07);
+
+        // Companion slits stepping outward a little — fills the cone / wider angle
+        ctx.globalAlpha = 0.75;
+        drawSlitCol(ctx, (colL + 53) % ART_W, leftX - slitW - 1, slitW, h, artScrollY);
+        drawSlitCol(ctx, (colR + 71) % ART_W, rightX + slitW + 1, slitW, h, artScrollY * 1.07);
+        ctx.globalAlpha = 0.48;
+        drawSlitCol(ctx, (colL + 97) % ART_W, leftX - slitW * 2 - 2, slitW, h, artScrollY);
+        drawSlitCol(ctx, (colR + 113) % ART_W, rightX + slitW * 2 + 2, slitW, h, artScrollY * 1.07);
+        ctx.globalAlpha = 0.28;
+        drawSlitCol(ctx, (colL + 131) % ART_W, leftX - slitW * 3 - 3, slitW, h, artScrollY);
+        drawSlitCol(ctx, (colR + 149) % ART_W, rightX + slitW * 3 + 3, slitW, h, artScrollY * 1.07);
+        ctx.globalAlpha = 1;
+      }
+
+
+      const ELECTRO_HUES = [175, 190, 210, 285, 310, 130, 55, 0, 145, 265, 40, 320, 100, 240, 15];
+
+      function electroHue() {
+        return ELECTRO_HUES[irand(ELECTRO_HUES.length)];
+      }
+
+
+      // Denser outward weirdness — still soft, born outside the void.
+      function spawnElectroBurst(elapsed, forceKind) {
+        const kind = forceKind || zoneKind;
+        const busy = kind === 'sparks' || kind === 'shards' || kind === 'comets' || kind === 'forks';
+
+        // Soft wall sheets (often both sides)
+        const nWall = kind === 'ribbons' || kind === 'veils' ? 2 : (busy ? 2 : 1);
+        for (let i = 0; i < nWall; i++) {
+          electro.push({
+            kind: 'sheet',
+            side: i === 0 ? (Math.random() < 0.5 ? -1 : 1) : (Math.random() < 0.5 ? -1 : 1),
+            u0: 0.08 + rand(0.1),
+            hue: electroHue(),
+            life: 0.22 + rand(0.32),
+            born: elapsed,
+            width: 0.003 + rand(0.008),
+            bright: 0.2 + rand(0.18),
+            yBias: (rand(1) - 0.5) * 0.12
+          });
+        }
+
+        // Outward rays / forks from void rim
+        if (kind === 'rays' || kind === 'beams' || kind === 'forks' || kind === 'comets' || Math.random() < 0.55) {
+          const nRay = kind === 'forks' ? (3 + irand(3)) : kind === 'rays' ? (4 + irand(3)) : (2 + irand(2));
+          for (let i = 0; i < nRay; i++) {
+            const base = Math.random() < 0.5 ? 0 : Math.PI;
+            const ang = base + (rand(1) - 0.5) * 1.15;
+            electro.push({
+              kind: kind === 'forks' ? 'fork' : 'ray',
+              ang: ang,
+              mirror: Math.random() < 0.5,
+              hue: electroHue(),
+              life: 0.18 + rand(0.32),
+              born: elapsed,
+              len: 22 + rand(55),
+              width: 1.1 + rand(2.6),
+              bright: 0.18 + rand(0.16),
+              branches: 2 + irand(4)
+            });
+          }
+        }
+
+        // Side glyphs / brackets
+        if (kind === 'glyphs' || kind === 'gates' || Math.random() < 0.3) {
+          const nG = kind === 'glyphs' ? 2 : 1;
+          for (let i = 0; i < nG; i++) {
+            electro.push({
+              kind: 'glyph',
+              side: Math.random() < 0.5 ? -1 : 1,
+              u0: 0.1 + rand(0.1),
+              hue: electroHue(),
+              life: 0.25 + rand(0.32),
+              born: elapsed,
+              bright: 0.24 + rand(0.16),
+              scale: 0.04 + rand(0.04)
+            });
+          }
+        }
+
+        // Art-coloured wall slit
+        if (kind === 'ribbons' || kind === 'veils' || Math.random() < 0.4) {
+          electro.push({
+            kind: 'artslit',
+            side: Math.random() < 0.5 ? -1 : 1,
+            u0: 0.09 + rand(0.1),
+            hue: electroHue(),
+            life: 0.2 + rand(0.28),
+            born: elapsed,
+            width: 0.004 + rand(0.01),
+            bright: 0.3 + rand(0.2),
+            colOff: irand(720)
+          });
+        }
+
+        // Soft side arc ribbon
+        if (kind === 'ribbons' || kind === 'rings' || Math.random() < 0.35) {
+          const side = Math.random() < 0.5 ? -1 : 1;
+          electro.push({
+            kind: 'ribbon',
+            side: side,
+            ang0: side < 0 ? Math.PI * 0.55 : -Math.PI * 0.4,
+            span: 0.45 + rand(0.55),
+            rad: 0.07 + rand(0.08),
+            hue: electroHue(),
+            life: 0.22 + rand(0.3),
+            born: elapsed,
+            bright: 0.22 + rand(0.16),
+            width: 1.2 + rand(1.8)
+          });
+        }
+
+        // Expanding partial rings from void rim (never a centre flash)
+        if (kind === 'rings' || Math.random() < 0.28) {
+          const nR = kind === 'rings' ? (2 + irand(2)) : 1;
+          for (let i = 0; i < nR; i++) {
+            const side = Math.random() < 0.5 ? -1 : 1;
+            electro.push({
+              kind: 'ring',
+              ang0: side < 0 ? Math.PI * 0.55 : -Math.PI * 0.35,
+              span: 0.7 + rand(0.9),
+              hue: electroHue(),
+              life: 0.35 + rand(0.4),
+              born: elapsed,
+              bright: 0.22 + rand(0.16),
+              rad0: 0.05 + rand(0.02),
+              radGrow: 0.12 + rand(0.2),
+              width: 1.4 + rand(2)
+            });
+          }
+        }
+
+        // Wireframe shards flying out from rim
+        if (kind === 'shards' || Math.random() < 0.32) {
+          const nS = kind === 'shards' ? (3 + irand(3)) : (1 + irand(2));
+          for (let i = 0; i < nS; i++) {
+            const base = (i / nS) * Math.PI * 2 + rand(0.4);
+            // Bias away from pure vertical into walls
+            const ang = base + (Math.cos(base) * 0.35);
+            electro.push({
+              kind: 'shard',
+              ang: ang,
+              hue: electroHue(),
+              life: 0.28 + rand(0.35),
+              born: elapsed,
+              bright: 0.28 + rand(0.2),
+              len: 24 + rand(50),
+              size: 6 + rand(14),
+              spin: rand(Math.PI),
+              spinRate: (rand(2) - 1) * 1.5
+            });
+          }
+        }
+
+        // Side gate frames expanding outward on walls
+        if (kind === 'gates' || Math.random() < 0.22) {
+          electro.push({
+            kind: 'gate',
+            side: Math.random() < 0.5 ? -1 : 1,
+            u0: 0.1 + rand(0.08),
+            hue: electroHue(),
+            life: 0.35 + rand(0.4),
+            born: elapsed,
+            bright: 0.26 + rand(0.18),
+            hScale: 0.35 + rand(0.35),
+            wScale: 0.04 + rand(0.05)
+          });
+        }
+
+        // Spark streaks — many thin outward needles
+        if (kind === 'sparks' || Math.random() < 0.3) {
+          const nSp = kind === 'sparks' ? (8 + irand(8)) : (3 + irand(4));
+          for (let i = 0; i < nSp; i++) {
+            const base = Math.random() < 0.5 ? 0 : Math.PI;
+            electro.push({
+              kind: 'spark',
+              ang: base + (rand(1) - 0.5) * 1.4,
+              hue: electroHue(),
+              life: 0.12 + rand(0.2),
+              born: elapsed,
+              bright: 0.25 + rand(0.25),
+              len: 14 + rand(40),
+              width: 0.6 + rand(1.2)
+            });
+          }
+        }
+
+        // Soft horizontal veils on walls (texture bands)
+        if (kind === 'veils' || Math.random() < 0.25) {
+          const nV = 2 + irand(2);
+          for (let i = 0; i < nV; i++) {
+            electro.push({
+              kind: 'veil',
+              side: Math.random() < 0.5 ? -1 : 1,
+              u0: 0.12 + rand(0.2),
+              y: 0.15 + rand(0.7),
+              hue: electroHue(),
+              life: 0.3 + rand(0.35),
+              born: elapsed,
+              bright: 0.2 + rand(0.18),
+              height: 0.04 + rand(0.08),
+              width: 0.15 + rand(0.25)
+            });
+          }
+        }
+
+        // Soft comet blobs drifting out from rim
+        if (kind === 'comets' || Math.random() < 0.22) {
+          const nC = kind === 'comets' ? (2 + irand(2)) : 1;
+          for (let i = 0; i < nC; i++) {
+            const base = Math.random() < 0.5 ? 0 : Math.PI;
+            electro.push({
+              kind: 'comet',
+              ang: base + (rand(1) - 0.5) * 0.9,
+              hue: electroHue(),
+              life: 0.4 + rand(0.45),
+              born: elapsed,
+              bright: 0.22 + rand(0.18),
+              len: 30 + rand(60),
+              rad: 4 + rand(12)
+            });
+          }
+        }
+
+        // Jagged / glitch wall column
+        if (kind === 'jagged' || Math.random() < 0.42) {
+          const nJag = kind === 'jagged' ? (2 + irand(3)) : 1;
+          for (let j = 0; j < nJag; j++) {
+            electro.push({
+              kind: 'jagged',
+              side: Math.random() < 0.5 ? -1 : 1,
+              u0: 0.1 + rand(0.14),
+              hue: electroHue(),
+              life: 0.28 + rand(0.38),
+              born: elapsed,
+              width: 0.006 + rand(0.014),
+              bright: 0.28 + rand(0.22),
+              segs: 18 + irand(30),
+              seed: rand(1000)
+            });
+          }
+        }
+
+        // Wavy discharge squiggles
+        if (Math.random() < 0.42) {
+          const nSq = busy ? 2 : 1;
+          for (let i = 0; i < nSq; i++) {
+            const base = Math.random() < 0.5 ? 0 : Math.PI;
+            electro.push({
+              kind: 'squiggle',
+              ang: base + (rand(1) - 0.5) * 0.95,
+              hue: Math.random() < 0.4 ? 190 : (Math.random() < 0.5 ? 0 : electroHue()),
+              life: 0.16 + rand(0.24),
+              born: elapsed,
+              len: 28 + rand(55),
+              bright: 0.24 + rand(0.2),
+              amp: 4 + rand(12),
+              freq: 0.12 + rand(0.22)
+            });
+          }
+        }
+
+        // Audio cue by kind
+        if (kind === 'sparks' || kind === 'shards') {
+          triggerShardScrape(0.35 + rand(0.35));
+          if (Math.random() < 0.7) triggerPlaneWhoosh(0.25 + rand(0.25));
+        } else if (kind === 'rings' || kind === 'gates') {
+          triggerRimBloom(0.4 + rand(0.35));
+        } else if (kind === 'comets' || kind === 'veils') {
+          triggerDeepThud(0.3 + rand(0.3));
+          if (Math.random() < 0.5) triggerPlaneWhoosh(0.3 + rand(0.25));
+        } else if (Math.random() < 0.7) {
+          triggerPlaneWhoosh(0.28 + rand(0.35));
+        }
+      }
+
+      function updateElectro(elapsed, dt) {
+        if (phase === 'desert') return;
+        if (elapsed >= nextZoneAt) {
+          zoneIdx = (zoneIdx + 1) % ZONE_CYCLE.length;
+          zoneKind = ZONE_CYCLE[zoneIdx];
+          nextZoneAt = elapsed + 5.5 + rand(4.5);
+          spawnElectroBurst(elapsed, zoneKind);
+          if (Math.random() < 0.55) triggerDeepThud(0.35 + rand(0.3));
+        }
+        if (elapsed >= nextElectroAt) {
+          spawnElectroBurst(elapsed);
+          nextElectroAt = elapsed + 0.28 + rand(0.5);
+        }
+        for (let i = electro.length - 1; i >= 0; i--) {
+          if (elapsed - electro[i].born > electro[i].life) electro.splice(i, 1);
+        }
+      }
+
+      function stampElectronic(ctx, w, h, elapsed) {
+        if (!electro.length) return;
+        const cx = w * 0.5;
+        const cy = h * 0.5;
+        const half = w * 0.5;
+        const minDim = Math.min(w, h);
+        const r0 = minDim * 0.05;
+
+        ctx.save();
+        ctx.globalCompositeOperation = 'source-over';
+        ctx.imageSmoothingEnabled = true;
+        ctx.lineCap = 'round';
+        ctx.lineJoin = 'round';
+
+        for (let i = 0; i < electro.length; i++) {
+          const e = electro[i];
+          const age = elapsed - e.born;
+          const fade = 1 - age / e.life;
+          const fadeIn = Math.min(1, age / (e.life * 0.35));
+          const a = e.bright * fade * fadeIn;
+          if (a < 0.02) continue;
+
+          if (e.kind === 'ray' || e.kind === 'fork' || e.kind === 'spark') {
+            const len = e.len * (0.7 + fadeIn * 0.4);
+            function strokeRay(ang, wid, length, alphaMul) {
+              const x1 = cx + Math.cos(ang) * r0;
+              const y1 = cy + Math.sin(ang) * r0;
+              const x2 = cx + Math.cos(ang) * (r0 + length);
+              const y2 = cy + Math.sin(ang) * (r0 + length);
+              ctx.strokeStyle = 'hsla(' + (e.hue | 0) + ',55%,40%,' + (a * 0.28 * alphaMul) + ')';
+              ctx.lineWidth = wid * 2.2;
+              ctx.beginPath();
+              ctx.moveTo(x1, y1);
+              ctx.lineTo(x2, y2);
+              ctx.stroke();
+              ctx.strokeStyle = 'hsla(' + (e.hue | 0) + ',65%,48%,' + (a * 0.55 * alphaMul) + ')';
+              ctx.lineWidth = wid;
+              ctx.beginPath();
+              ctx.moveTo(x1, y1);
+              ctx.lineTo(x2, y2);
+              ctx.stroke();
+            }
+            strokeRay(e.ang, e.width, len, 1);
+            if (e.mirror) strokeRay(e.ang + Math.PI, e.width, len, 1);
+            if (e.kind === 'fork') {
+              for (let b = 0; b < (e.branches || 2); b++) {
+                const ba = e.ang + (b - 1) * 0.18;
+                strokeRay(ba, e.width * 0.55, len * (0.55 + 0.2 * b), 0.75);
+              }
+            }
+            continue;
+          }
+
+          if (e.kind === 'ring') {
+            const rad = (e.rad0 + fadeIn * e.radGrow) * minDim;
+            ctx.strokeStyle = 'hsla(' + (e.hue | 0) + ',60%,48%,' + (a * 0.45) + ')';
+            ctx.lineWidth = e.width * (1.2 + fadeIn);
+            ctx.beginPath();
+            ctx.arc(cx, cy, rad, e.ang0, e.ang0 + e.span);
+            ctx.stroke();
+            ctx.strokeStyle = 'hsla(' + (e.hue | 0) + ',70%,60%,' + (a * 0.25) + ')';
+            ctx.lineWidth = e.width * 0.5;
+            ctx.beginPath();
+            ctx.arc(cx, cy, rad * 1.02, e.ang0, e.ang0 + e.span);
+            ctx.stroke();
+            continue;
+          }
+
+          if (e.kind === 'shard') {
+            const dist = r0 + e.len * (0.35 + fadeIn * 0.75);
+            const x = cx + Math.cos(e.ang) * dist;
+            const y = cy + Math.sin(e.ang) * dist;
+            const s = e.size * (0.7 + fadeIn * 0.5);
+            ctx.save();
+            ctx.translate(x, y);
+            ctx.rotate(e.spin + age * e.spinRate);
+            ctx.strokeStyle = 'hsla(' + (e.hue | 0) + ',70%,55%,' + (a * 0.7) + ')';
+            ctx.lineWidth = 1.3;
+            ctx.beginPath();
+            ctx.moveTo(0, -s);
+            ctx.lineTo(s * 0.55, 0);
+            ctx.lineTo(0, s * 0.7);
+            ctx.lineTo(-s * 0.55, 0);
+            ctx.closePath();
+            ctx.stroke();
+            ctx.beginPath();
+            ctx.moveTo(0, -s * 0.4);
+            ctx.lineTo(0, s * 0.35);
+            ctx.moveTo(-s * 0.3, 0);
+            ctx.lineTo(s * 0.3, 0);
+            ctx.stroke();
+            ctx.restore();
+            continue;
+          }
+
+          if (e.kind === 'gate') {
+            const x = cx + e.side * e.u0 * half * (1 + fadeIn * 0.35);
+            const hh = e.hScale * h * (0.85 + fadeIn * 0.3);
+            const ww = e.wScale * w * (1 + fadeIn * 0.5);
+            ctx.strokeStyle = 'hsla(' + (e.hue | 0) + ',60%,50%,' + (a * 0.55) + ')';
+            ctx.lineWidth = 1.5;
+            ctx.strokeRect(x - ww * 0.5, cy - hh * 0.5, ww, hh);
+            ctx.strokeRect(x - ww * 0.28, cy - hh * 0.32, ww * 0.56, hh * 0.64);
+            ctx.beginPath();
+            ctx.moveTo(x - ww * 0.5, cy);
+            ctx.lineTo(x + ww * 0.5, cy);
+            ctx.stroke();
+            continue;
+          }
+
+          if (e.kind === 'comet') {
+            const dist = r0 + e.len * fadeIn;
+            const x = cx + Math.cos(e.ang) * dist;
+            const y = cy + Math.sin(e.ang) * dist;
+            const rad = e.rad * (0.6 + fadeIn * 0.6);
+            const g = ctx.createRadialGradient(x, y, 0, x, y, rad * 2.2);
+            g.addColorStop(0, 'hsla(' + (e.hue | 0) + ',80%,55%,' + (a * 0.55) + ')');
+            g.addColorStop(0.45, 'hsla(' + (e.hue | 0) + ',70%,40%,' + (a * 0.22) + ')');
+            g.addColorStop(1, 'hsla(' + (e.hue | 0) + ',60%,30%,0)');
+            ctx.fillStyle = g;
+            ctx.beginPath();
+            ctx.arc(x, y, rad * 2.2, 0, Math.PI * 2);
+            ctx.fill();
+            // soft trail back toward void
+            const tx = cx + Math.cos(e.ang) * r0;
+            const ty = cy + Math.sin(e.ang) * r0;
+            ctx.strokeStyle = 'hsla(' + (e.hue | 0) + ',60%,45%,' + (a * 0.3) + ')';
+            ctx.lineWidth = rad * 0.45;
+            ctx.beginPath();
+            ctx.moveTo(tx, ty);
+            ctx.lineTo(x, y);
+            ctx.stroke();
+            continue;
+          }
+
+          if (e.kind === 'veil') {
+            const x0 = cx + e.side * e.u0 * half;
+            const yw = e.height * h;
+            const y = e.y * h;
+            const ww = e.width * half;
+            const g = ctx.createLinearGradient(x0, y - yw, x0, y + yw);
+            g.addColorStop(0, 'hsla(' + (e.hue | 0) + ',60%,40%,0)');
+            g.addColorStop(0.5, 'hsla(' + (e.hue | 0) + ',70%,45%,' + (a * 0.5) + ')');
+            g.addColorStop(1, 'hsla(' + (e.hue | 0) + ',60%,40%,0)');
+            ctx.fillStyle = g;
+            const xL = e.side < 0 ? x0 - ww : x0;
+            ctx.fillRect(xL, y - yw, ww, yw * 2);
+            continue;
+          }
+
+          if (e.kind === 'ribbon') {
+            const rad = e.rad * minDim * (1 + fadeIn * 0.4);
+            ctx.strokeStyle = 'hsla(' + (e.hue | 0) + ',55%,42%,' + (a * 0.5) + ')';
+            ctx.lineWidth = e.width;
+            ctx.beginPath();
+            ctx.arc(cx, cy, rad, e.ang0, e.ang0 + e.span * e.side);
+            ctx.stroke();
+            continue;
+          }
+
+          if (e.kind === 'glyph') {
+            const x = cx + e.side * e.u0 * half;
+            const s = e.scale * minDim * (1 + fadeIn * 0.5);
+            ctx.strokeStyle = 'hsla(' + (e.hue | 0) + ',55%,45%,' + (a * 0.55) + ')';
+            ctx.lineWidth = 1.2;
+            const hx = e.side * s * 0.35;
+            ctx.beginPath();
+            ctx.moveTo(x, cy - s);
+            ctx.lineTo(x + hx, cy - s);
+            ctx.moveTo(x, cy - s);
+            ctx.lineTo(x, cy + s);
+            ctx.lineTo(x + hx, cy + s);
+            ctx.stroke();
+            ctx.beginPath();
+            ctx.moveTo(x, cy - s * 0.25);
+            ctx.lineTo(x + hx * 0.7, cy - s * 0.25);
+            ctx.moveTo(x, cy + s * 0.25);
+            ctx.lineTo(x + hx * 0.7, cy + s * 0.25);
+            ctx.stroke();
+            continue;
+          }
+
+          if (e.kind === 'artslit') {
+            const x = Math.floor(cx + e.side * e.u0 * half);
+            const sw = Math.max(2, Math.round(w * e.width));
+            ctx.globalAlpha = a * 0.55;
+            const col = ((Math.floor(artScroll) + e.colOff) % ART_W + ART_W) % ART_W;
+            drawSlitCol(ctx, col, x - (sw >> 1), sw, h, artScrollY + e.colOff);
+            ctx.globalAlpha = 1;
+            continue;
+          }
+
+          if (e.kind === 'jagged') {
+            const x = Math.floor(cx + e.side * e.u0 * half);
+            const sw = Math.max(3, Math.round(w * e.width));
+            const segH = h / e.segs;
+            ctx.globalCompositeOperation = 'source-over';
+            for (let s = 0; s < e.segs; s++) {
+              const n = Math.sin(s * 0.7 + e.seed + age * 8) * 0.5 + 0.5;
+              if (n < 0.28) continue;
+              const yy = s * segH;
+              const ww = sw * (0.4 + n * 1.2);
+              const ox = e.side * (n * 4);
+              ctx.globalAlpha = a * (0.25 + n * 0.55);
+              ctx.fillStyle = 'hsla(' + (e.hue | 0) + ',70%,' + (35 + n * 20) + '%,1)';
+              ctx.fillRect(x + ox - ww * 0.5, yy, ww, Math.max(1, segH * 0.7));
+              if (n > 0.7) {
+                ctx.globalAlpha = a * 0.45;
+                ctx.fillStyle = 'hsla(' + (e.hue | 0) + ',80%,55%,1)';
+                ctx.fillRect(x + ox - 1, yy, 2, Math.max(1, segH * 0.5));
+              }
+            }
+            ctx.globalAlpha = 1;
+            continue;
+          }
+
+          if (e.kind === 'squiggle') {
+            const len = e.len * (0.7 + fadeIn * 0.4);
+            ctx.strokeStyle = 'hsla(' + (e.hue | 0) + ',40%,70%,' + (a * 0.55) + ')';
+            ctx.lineWidth = 1.1;
+            ctx.beginPath();
+            const steps = 28;
+            for (let s = 0; s <= steps; s++) {
+              const tt = s / steps;
+              const r = r0 + tt * len;
+              const wob = Math.sin(tt * Math.PI * 2 * (3 + e.freq * 10) + age * 14) * e.amp * (0.4 + tt);
+              const ang = e.ang + wob * 0.012;
+              const x = cx + Math.cos(ang) * r;
+              const y = cy + Math.sin(ang) * r + wob * 0.35;
+              if (s === 0) ctx.moveTo(x, y);
+              else ctx.lineTo(x, y);
+            }
+            ctx.stroke();
+            continue;
+          }
+
+          // Soft vertical wall sheet
+          const dist = e.u0 * half;
+          const x = Math.floor(cx + e.side * dist);
+          const sw = Math.max(2, Math.round(w * e.width));
+          const bloom = sw * 5;
+          ctx.globalAlpha = a * 0.55;
+          const g = ctx.createLinearGradient(x - bloom, 0, x + bloom, 0);
+          g.addColorStop(0, 'hsla(' + (e.hue | 0) + ',55%,38%,0)');
+          g.addColorStop(0.5, 'hsla(' + (e.hue | 0) + ',60%,42%,0.55)');
+          g.addColorStop(1, 'hsla(' + (e.hue | 0) + ',55%,38%,0)');
+          ctx.fillStyle = g;
+          ctx.fillRect(x - bloom, 0, bloom * 2, h);
+          ctx.globalAlpha = a * 0.4;
+          ctx.fillStyle = 'hsla(' + (e.hue | 0) + ',50%,40%,1)';
+          ctx.fillRect(x - (sw >> 1), 0, sw, h);
+          ctx.globalAlpha = 1;
+        }
+
+        ctx.restore();
+        ctx.globalCompositeOperation = 'source-over';
+        ctx.globalAlpha = 1;
+        ctx.lineCap = 'butt';
+      }
+
+
+      // ——— Desert flight (from mountain2) ———
+      function paintFaceTexture() {
+        if (faceReady) return;
+        const c = faceCtx;
+        c.fillStyle = '#001018';
+        c.fillRect(0, 0, 128, 128);
+        c.strokeStyle = 'rgba(120,230,255,0.55)';
+        c.lineWidth = 0.6;
+        for (let i = 0; i < 18; i++) {
+          const y = (i / 18) * 128;
+          c.beginPath();
+          c.moveTo(0, y);
+          for (let x = 0; x <= 128; x += 4) c.lineTo(x, y + Math.sin(x * 0.15 + i) * 3);
+          c.stroke();
+        }
+        for (let i = 0; i < 14; i++) {
+          const x = (i / 14) * 128;
+          c.beginPath();
+          c.moveTo(x, 0);
+          c.lineTo(x + Math.sin(i) * 8, 128);
+          c.stroke();
+        }
+        c.globalCompositeOperation = 'lighter';
+        for (let i = 0; i < 12; i++) {
+          const x = rand(128), y = rand(128), r = 6 + rand(18);
+          const g = c.createRadialGradient(x, y, 0, x, y, r);
+          g.addColorStop(0, 'rgba(180,255,255,0.55)');
+          g.addColorStop(1, 'rgba(0,0,0,0)');
+          c.fillStyle = g;
+          c.fillRect(0, 0, 128, 128);
+        }
+        c.globalCompositeOperation = 'source-over';
+        faceReady = true;
+      }
+
+      function paintFractalTerrain(ctx, hueA, hueB, bands, ampScale) {
+        for (let band = 0; band < bands; band++) {
+          const tt = band / bands;
+          const hue = hueA + (hueB - hueA) * tt + rand(8);
+          const light = 6 + tt * 28;
+          ctx.fillStyle = 'hsla(' + (hue % 360) + ',' + (70 + tt * 20) + '%,' + light + '%,0.95)';
+          ctx.beginPath();
+          ctx.moveTo(0, TERRAIN_H);
+          const baseY = tt * TERRAIN_H * 0.85;
+          for (let x = 0; x <= TERRAIN_W; x += 2) {
+            let n = 0, amp = 26 * ampScale, freq = 0.014;
+            for (let o = 0; o < 6; o++) {
+              n += Math.sin(x * freq + band * 1.9 + o * 0.8) * amp;
+              amp *= 0.52;
+              freq *= 2.08;
+            }
+            n += Math.abs(Math.sin(x * 0.009 + band * 0.7)) * 10 * ampScale;
+            ctx.lineTo(x, baseY + 20 + n);
+          }
+          ctx.lineTo(TERRAIN_W, TERRAIN_H);
+          ctx.closePath();
+          ctx.fill();
+        }
+      }
+
+      function paintPools(ctx, hue, count, alpha) {
+        ctx.globalCompositeOperation = 'lighter';
+        for (let i = 0; i < count; i++) {
+          const x = rand(TERRAIN_W), y = rand(TERRAIN_H);
+          const r = 12 + rand(55);
+          const g = ctx.createRadialGradient(x, y, 0, x, y, r);
+          g.addColorStop(0, 'hsla(' + ((hue + rand(30)) % 360) + ',95%,' + (45 + rand(25)) + '%,' + alpha + ')');
+          g.addColorStop(0.5, 'hsla(' + ((hue + 40) % 360) + ',80%,25%,0.25)');
+          g.addColorStop(1, 'rgba(0,0,0,0)');
+          ctx.fillStyle = g;
+          ctx.beginPath();
+          ctx.ellipse(x, y, r * (1.2 + rand(0.8)), r * (0.4 + rand(0.5)), rand(Math.PI), 0, Math.PI * 2);
+          ctx.fill();
+        }
+        ctx.globalCompositeOperation = 'source-over';
+      }
+
+      function paintHorizonBand(ctx, hue, alpha) {
+        const g = ctx.createLinearGradient(0, 0, 0, TERRAIN_H * 0.45);
+        g.addColorStop(0, 'hsla(' + hue + ',70%,18%,' + alpha + ')');
+        g.addColorStop(1, 'rgba(0,0,0,0)');
+        ctx.fillStyle = g;
+        ctx.fillRect(0, 0, TERRAIN_W, TERRAIN_H * 0.45);
+      }
+
+      function paintCanyon(ctx, hueRock, hueRiver) {
+        ctx.fillStyle = '#020008';
+        ctx.fillRect(0, 0, TERRAIN_W, TERRAIN_H);
+        for (let side = 0; side < 2; side++) {
+          for (let band = 0; band < 8; band++) {
+            const hue = hueRock + band * 8 + side * 40;
+            ctx.fillStyle = 'hsla(' + (hue % 360) + ',75%,' + (8 + band * 3) + '%,0.9)';
+            ctx.beginPath();
+            const edge = side === 0 ? 0 : TERRAIN_W;
+            const mid = TERRAIN_W * 0.5;
+            ctx.moveTo(edge, 0);
+            for (let y = 0; y <= TERRAIN_H; y += 4) {
+              let n = Math.sin(y * 0.03 + band) * 20 + Math.sin(y * 0.08) * 10;
+              const x = mid + (side === 0 ? -1 : 1) * (40 + band * 18 + n + y * 0.15);
+              ctx.lineTo(x, y);
+            }
+            ctx.lineTo(edge, TERRAIN_H);
+            ctx.closePath();
+            ctx.fill();
+          }
+        }
+        ctx.globalCompositeOperation = 'lighter';
+        for (let i = 0; i < 25; i++) {
+          const x = TERRAIN_W * 0.5 + (rand(1) - 0.5) * 40;
+          ctx.fillStyle = 'hsla(' + hueRiver + ',95%,' + (40 + rand(30)) + '%,0.45)';
+          ctx.fillRect(x - 2, 0, 3 + rand(5), TERRAIN_H);
+        }
+        ctx.globalCompositeOperation = 'source-over';
+      }
+
+      function paintTerrain(style, ctx) {
+        const canvas = ctx.canvas;
+        canvas.width = TERRAIN_W;
+        canvas.height = TERRAIN_H;
+        style = style % 6;
+        ctx.fillStyle = '#000';
+        ctx.fillRect(0, 0, TERRAIN_W, TERRAIN_H);
+        if (style === 0) {
+          paintFractalTerrain(ctx, 300, 340, 12, 0.85);
+          paintPools(ctx, 320, 20, 0.55);
+        } else if (style === 1) {
+          paintFractalTerrain(ctx, 15, 290, 18, 1.1);
+          paintHorizonBand(ctx, 280, 0.4);
+        } else if (style === 2) {
+          paintFractalTerrain(ctx, 35, 200, 14, 0.9);
+          paintPools(ctx, 175, 28, 0.7);
+        } else if (style === 3) {
+          paintFractalTerrain(ctx, 110, 210, 10, 0.7);
+          paintPools(ctx, 100, 16, 0.5);
+        } else if (style === 4) {
+          paintCanyon(ctx, 25, 200);
+        } else {
+          paintFractalTerrain(ctx, 25, 260, 8, 0.55);
+          paintHorizonBand(ctx, 30, 0.55);
+        }
+        ctx.globalCompositeOperation = 'lighter';
+        for (let i = 0; i < 35; i++) {
+          ctx.fillStyle = 'hsla(' + irand(360) + ',90%,' + (35 + rand(30)) + '%,0.18)';
+          ctx.fillRect(0, rand(TERRAIN_H), TERRAIN_W, 1 + rand(3));
+        }
+        ctx.globalCompositeOperation = 'source-over';
+      }
+
+      function beginTerrainCrossfade(style, elapsed) {
+        paintTerrain(style, terrainBackCtx);
+        terrainFading = true;
+        terrainBlend = 0;
+        terrainFadeT0 = elapsed;
+        groundHueTarget = (groundHue + 40 + rand(80)) % 360;
+      }
+
+      function updateTerrainBlend(elapsed) {
+        if (!terrainFading) { terrainBlend = 1; return; }
+        const tt = (elapsed - terrainFadeT0) / TERRAIN_BLEND_DUR;
+        if (tt >= 1) {
+          terrainFading = false;
+          terrainBlend = 1;
+          const sw = terrainFront, swCtx = terrainFrontCtx;
+          terrainFront = terrainBack; terrainFrontCtx = terrainBackCtx;
+          terrainBack = sw; terrainBackCtx = swCtx;
+        } else {
+          terrainBlend = tt * tt * (3 - 2 * tt);
+        }
+      }
+
+      function sampleTerrainRow(ctx, yDest, u0, scale, alpha, drawW) {
+        const row = ((Math.floor(u0) % TERRAIN_H) + TERRAIN_H) % TERRAIN_H;
+        const srcW = Math.max(8, Math.min(TERRAIN_W, Math.floor(TERRAIN_W / Math.max(0.08, scale))));
+        const srcX = ((Math.floor(camX) % TERRAIN_W) + TERRAIN_W) % TERRAIN_W;
+        ctx.globalAlpha = alpha;
+        try {
+          if (srcX + srcW <= TERRAIN_W) {
+            ctx.drawImage(terrainFront, srcX, row, srcW, 1, 0, yDest, drawW, 1);
+            if (terrainFading && terrainBlend > 0.01) {
+              ctx.globalAlpha = alpha * terrainBlend;
+              ctx.drawImage(terrainBack, srcX, row, srcW, 1, 0, yDest, drawW, 1);
+            }
+          } else {
+            const w1 = TERRAIN_W - srcX;
+            const d1 = Math.floor(drawW * (w1 / srcW));
+            ctx.drawImage(terrainFront, srcX, row, w1, 1, 0, yDest, d1, 1);
+            ctx.drawImage(terrainFront, 0, row, srcW - w1, 1, d1, yDest, drawW - d1, 1);
+            if (terrainFading && terrainBlend > 0.01) {
+              ctx.globalAlpha = alpha * terrainBlend;
+              ctx.drawImage(terrainBack, srcX, row, w1, 1, 0, yDest, d1, 1);
+              ctx.drawImage(terrainBack, 0, row, srcW - w1, 1, d1, yDest, drawW - d1, 1);
+            }
+          }
+        } catch (e) {}
+        ctx.globalAlpha = 1;
+      }
+
+      function drawDesertGround(ctx, w, h, horizon) {
+        const groundH = h - horizon;
+        ctx.imageSmoothingEnabled = false;
+        const base = ctx.createLinearGradient(0, horizon, 0, h);
+        base.addColorStop(0, 'hsla(' + (groundHue | 0) + ',80%,8%,1)');
+        base.addColorStop(1, 'hsla(' + ((groundHue + 20) % 360 | 0) + ',90%,18%,1)');
+        ctx.fillStyle = base;
+        ctx.fillRect(0, horizon, w, groundH);
+        for (let py = 0; py < groundH; py++) {
+          const y = horizon + py;
+          const depth = py / groundH;
+          const worldDist = 1.0 / (depth + 0.06);
+          const u = camZ * 2.2 + worldDist * 18;
+          const fov = 0.05 + 0.95 * Math.pow(1 - depth, 1.55);
+          const scale = 1 / Math.max(0.05, fov);
+          const alpha = 0.5 + depth * 0.5;
+          const thick = depth > 0.5 ? 2 : 1;
+          sampleTerrainRow(ctx, y, u, scale, alpha, w);
+          if (thick > 1 && py + 1 < groundH) {
+            sampleTerrainRow(ctx, y + 1, u + 0.35, scale * 1.02, alpha * 0.88, w);
+            py++;
+          }
+        }
+        ctx.globalCompositeOperation = 'source-atop';
+        ctx.fillStyle = 'hsla(' + (groundHue | 0) + ',95%,48%,0.34)';
+        ctx.fillRect(0, horizon, w, groundH);
+        ctx.fillStyle = 'hsla(' + ((groundHue + 55) % 360 | 0) + ',90%,40%,0.16)';
+        ctx.fillRect(0, horizon, w, groundH);
+        ctx.fillStyle = 'hsla(' + ((groundHue + 140) % 360 | 0) + ',80%,35%,0.1)';
+        ctx.fillRect(0, horizon, w, groundH * 0.55);
+        ctx.fillStyle = 'hsla(' + ((groundHue + 200) % 360 | 0) + ',85%,42%,0.08)';
+        ctx.fillRect(0, horizon + groundH * 0.45, w, groundH * 0.55);
+        ctx.globalCompositeOperation = 'lighter';
+        const cx = w * 0.5;
+        for (let i = 0; i < 14; i++) {
+          const ang = (i / 14 - 0.5) * 1.15;
+          const g = ctx.createLinearGradient(cx, horizon, cx + Math.sin(ang) * w * 0.7, h);
+          g.addColorStop(0, 'hsla(' + ((groundHue + i * 8) % 360) + ',100%,55%,0)');
+          g.addColorStop(0.35, 'hsla(' + ((groundHue + i * 8) % 360) + ',100%,50%,0.08)');
+          g.addColorStop(1, 'hsla(' + ((groundHue + 20) % 360) + ',100%,40%,0.18)');
+          ctx.fillStyle = g;
+          ctx.beginPath();
+          ctx.moveTo(cx - 2, horizon);
+          ctx.lineTo(cx + Math.sin(ang) * w * 0.85 - 8, h);
+          ctx.lineTo(cx + Math.sin(ang) * w * 0.85 + 8, h);
+          ctx.closePath();
+          ctx.fill();
+        }
+        ctx.globalCompositeOperation = 'source-over';
+        ctx.fillStyle = 'rgba(0,0,0,0.85)';
+        ctx.fillRect(0, horizon - 1, w, 2);
+        ctx.fillStyle = 'hsla(' + (groundHue | 0) + ',90%,55%,0.35)';
+        ctx.fillRect(0, horizon, w, 1);
+      }
+
+      function drawDesertStars(ctx, w, h, horizon) {
+        ctx.fillStyle = '#000';
+        ctx.fillRect(0, 0, w, horizon);
+        for (let i = 0; i < stars.length; i++) {
+          const s = stars[i];
+          ctx.globalAlpha = s.a * (0.7 + 0.3 * Math.sin(camZ * 0.02 + i));
+          ctx.fillStyle = '#e8f0ff';
+          ctx.fillRect(s.x * w, s.y * horizon, s.s, s.s);
+        }
+        ctx.globalAlpha = 1;
+      }
+
+      const _wireA = [];
+      const _wireB = [];
+
+      function wirePath(kind, out) {
+        out.length = 0;
+        if (kind === 0) {
+          // Monolith / gate slab
+          out.push([-16, -38], [16, -38], [16, 38], [-16, 38], [-16, -38]);
+          out.push(null);
+          out.push([-16, -14], [16, -14], null, [-16, 14], [16, 14]);
+          out.push(null);
+          out.push([-8, -38], [-8, 38], null, [8, -38], [8, 38]);
+        } else if (kind === 1) {
+          // Octahedron / diamond
+          out.push([0, -36], [26, 0], [0, 36], [-26, 0], [0, -36]);
+          out.push(null);
+          out.push([0, -36], [0, 36], null, [-26, 0], [26, 0]);
+          out.push(null);
+          out.push([-13, -18], [13, -18], [13, 18], [-13, 18], [-13, -18]);
+        } else if (kind === 2) {
+          // Hex crystal
+          for (let i = 0; i < 6; i++) {
+            const a = (i / 6) * Math.PI * 2 - Math.PI / 2;
+            out.push([Math.cos(a) * 30, Math.sin(a) * 30]);
+          }
+          out.push([Math.cos(-Math.PI / 2) * 30, Math.sin(-Math.PI / 2) * 30]);
+          out.push(null);
+          out.push([0, -30], [0, 30], null, [-26, -15], [26, 15], null, [26, -15], [-26, 15]);
+        } else if (kind === 3) {
+          // Pyramid
+          out.push([-22, 32], [0, -36], [22, 32], [-22, 32]);
+          out.push(null);
+          out.push([-22, 32], [0, 8], [22, 32], null, [0, -36], [0, 8]);
+          out.push(null);
+          out.push([-11, 8], [11, 8]);
+        } else if (kind === 4) {
+          // Star / cross crystal
+          for (let i = 0; i <= 16; i++) {
+            const a = (i / 16) * Math.PI * 2;
+            const r = (i % 2 === 0) ? 30 : 14;
+            out.push([Math.cos(a) * r, Math.sin(a) * r]);
+          }
+          out.push(null);
+          out.push([0, -30], [0, 30], null, [-30, 0], [30, 0]);
+        } else if (kind === 5) {
+          // Nested squares (wireframe cube face)
+          out.push([-28, -28], [28, -28], [28, 28], [-28, 28], [-28, -28]);
+          out.push(null);
+          out.push([-16, -16], [16, -16], [16, 16], [-16, 16], [-16, -16]);
+          out.push(null);
+          out.push([-28, -28], [-16, -16], null, [28, -28], [16, -16]);
+          out.push(null);
+          out.push([-28, 28], [-16, 16], null, [28, 28], [16, 16]);
+        } else {
+          // Spire / arrow
+          out.push([0, -40], [10, -8], [6, -8], [6, 36], [-6, 36], [-6, -8], [-10, -8], [0, -40]);
+          out.push(null);
+          out.push([-6, 12], [6, 12], null, [-6, 24], [6, 24]);
+        }
+        return out;
+      }
+
+      function strokeMorphedWire(ctx, kindA, kindB, morph) {
+        wirePath(kindA, _wireA);
+        wirePath(kindB, _wireB);
+        ctx.beginPath();
+        let started = false;
+        const n = Math.max(_wireA.length, _wireB.length);
+        for (let i = 0; i < n; i++) {
+          const a = _wireA[i < _wireA.length ? i : _wireA.length - 1];
+          const b = _wireB[i < _wireB.length ? i : _wireB.length - 1];
+          if (a === null || b === null || !Array.isArray(a) || !Array.isArray(b)) {
+            started = false;
+            continue;
+          }
+          const x = a[0] * (1 - morph) + b[0] * morph;
+          const y = a[1] * (1 - morph) + b[1] * morph;
+          if (!started) { ctx.moveTo(x, y); started = true; }
+          else ctx.lineTo(x, y);
+        }
+        ctx.stroke();
+      }
+
+      function spawnCrystal(elapsed, near) {
+        const side = Math.random() < 0.5 ? -1 : 1;
+        const kindA = irand(7);
+        let kindB = irand(7);
+        if (kindB === kindA) kindB = (kindA + 1 + irand(5)) % 7;
+        const hueBase = [185, 195, 170, 310, 45, 130, 260, 20][irand(8)];
+        crystals.push({
+          born: elapsed,
+          life: near ? (5 + rand(4)) : (9 + rand(10)),
+          near: near,
+          x: near ? side * (0.5 + rand(0.6)) : (rand(1) - 0.5) * 1.7,
+          depth: near ? (0.7 + rand(0.28)) : (0.04 + rand(0.28)),
+          vz: near ? (0.11 + rand(0.1)) : (0.03 + rand(0.045)),
+          vx: near ? side * (0.02 + rand(0.045)) : (rand(0.025) - 0.012),
+          spin: rand(Math.PI * 2),
+          spinRate: (rand(0.55) - 0.27),
+          size: near ? (0.2 + rand(0.2)) : (0.04 + rand(0.06)),
+          hue: hueBase + rand(30) - 10,
+          kindA: kindA,
+          kindB: kindB,
+          morphSpeed: 0.09 + rand(0.14),
+          bobRate: 0.2 + rand(0.4)
+        });
+        if (crystals.length > 22) crystals.shift();
+      }
+
+      function ensureHorizonArc(elapsed) {
+        let horizonCount = 0;
+        for (let i = 0; i < crystals.length; i++) {
+          if (!crystals[i].near && crystals[i].depth < 0.4) horizonCount++;
+        }
+        while (horizonCount < 7) {
+          spawnCrystal(elapsed, false);
+          horizonCount++;
+        }
+      }
+
+      function drawWireShape(ctx, size, hue, spin, glow, kindA, kindB, morph) {
+        const s = size / 36;
+        ctx.save();
+        ctx.rotate(spin);
+        ctx.scale(s, s);
+
+        // Soft glow halo
+        ctx.globalCompositeOperation = 'lighter';
+        const g = ctx.createRadialGradient(0, 0, 4, 0, 0, 48);
+        g.addColorStop(0, 'hsla(' + (hue | 0) + ',100%,65%,' + (0.35 * glow) + ')');
+        g.addColorStop(0.45, 'hsla(' + (hue | 0) + ',90%,50%,' + (0.12 * glow) + ')');
+        g.addColorStop(1, 'hsla(' + (hue | 0) + ',80%,40%,0)');
+        ctx.fillStyle = g;
+        ctx.beginPath();
+        ctx.arc(0, 0, 48, 0, Math.PI * 2);
+        ctx.fill();
+
+        // Thick outer glow stroke
+        ctx.lineJoin = 'round';
+        ctx.lineCap = 'round';
+        ctx.strokeStyle = 'hsla(' + (hue | 0) + ',100%,55%,' + (0.35 * glow) + ')';
+        ctx.lineWidth = 5.5;
+        strokeMorphedWire(ctx, kindA, kindB, morph);
+
+        // Bright wire
+        ctx.strokeStyle = 'hsla(' + (hue | 0) + ',95%,75%,' + (0.9 * glow) + ')';
+        ctx.lineWidth = 1.6;
+        strokeMorphedWire(ctx, kindA, kindB, morph);
+
+        // Hot core line
+        ctx.strokeStyle = 'hsla(' + ((hue + 20) % 360 | 0) + ',100%,90%,' + (0.55 * glow) + ')';
+        ctx.lineWidth = 0.7;
+        strokeMorphedWire(ctx, kindA, kindB, morph);
+
+        ctx.restore();
+        ctx.globalCompositeOperation = 'source-over';
+        ctx.globalAlpha = 1;
+      }
+
+      function drawCrystals(ctx, w, h, horizon, elapsed) {
+        const list = crystals.slice().sort(function (a, b) { return a.depth - b.depth; });
+        for (let i = 0; i < list.length; i++) {
+          const c = list[i];
+          const age = elapsed - c.born;
+          if (age < 0 || age > c.life) continue;
+          const fadeIn = Math.min(1, age / 0.55);
+          const fadeOut = Math.min(1, (c.life - age) / 0.9);
+          const glow = fadeIn * fadeOut;
+          const d = Math.max(0.02, Math.min(1.2, c.depth));
+          const persp = 0.15 + d * 0.85;
+          const x = w * 0.5 + c.x * w * 0.5 * (0.3 + d);
+          const bob = Math.sin(age * c.bobRate + c.spin) * (8 + d * 10);
+          const y = horizon - 10 - (1 - d) * (horizon * 0.28) - (c.near ? d * horizon * 0.38 : d * horizon * 0.1) + bob;
+          const size = c.size * Math.min(w, h) * persp;
+          if (x < -size * 2 || x > w + size * 2 || y < -size || y > horizon + 24) continue;
+
+          const morphCycle = (age * c.morphSpeed) % 2;
+          const morph = morphCycle < 1 ? morphCycle : 2 - morphCycle;
+          const morphS = morph * morph * (3 - 2 * morph);
+
+          ctx.save();
+          ctx.translate(x, y);
+          drawWireShape(ctx, size, c.hue, c.spin + age * c.spinRate, glow, c.kindA, c.kindB, morphS);
+          ctx.restore();
+        }
+      }
+
+      function updateCrystals(dt, elapsed) {
+        for (let i = crystals.length - 1; i >= 0; i--) {
+          const c = crystals[i];
+          c.depth += c.vz * dt;
+          c.x += c.vx * dt;
+          if (c.near) c.x += (c.x < 0 ? -1 : 1) * 0.08 * dt;
+          if (elapsed - c.born > c.life || c.depth > 1.35) crystals.splice(i, 1);
+        }
+        ensureHorizonArc(elapsed);
+        if (elapsed >= nextCrystalAt) {
+          spawnCrystal(elapsed, Math.random() < 0.5);
+          if (Math.random() < 0.45) spawnCrystal(elapsed, Math.random() < 0.35);
+          nextCrystalAt = elapsed + 0.7 + rand(1.2);
+        }
+      }
+
+      function enterDesertPhase(elapsed) {
+        paintFaceTexture();
+        desertStyle = 0;
+        paintTerrain(0, terrainFrontCtx);
+        terrainFading = false;
+        terrainBlend = 1;
+        nextDesertArtAt = elapsed + 8;
+        camZ = 0;
+        camX = 0;
+        groundHue = 320;
+        groundHueTarget = 310;
+        desertInvert = 0;
+        nextDesertInvertAt = elapsed + 6;
+        nextDesertPaletteAt = elapsed + 8;
+        crystals.length = 0;
+        nextCrystalAt = elapsed + 0.5;
+        lastDesertWhooshZ = 0;
+        for (let i = 0; i < 7; i++) {
+          const kindA = i % 7;
+          const kindB = (i + 2 + irand(3)) % 7;
+          crystals.push({
+            born: elapsed,
+            life: 24,
+            near: false,
+            x: (i / 6 - 0.5) * 1.5,
+            depth: 0.06 + i * 0.025,
+            vz: 0.028 + rand(0.02),
+            vx: rand(0.012) - 0.006,
+            spin: rand(Math.PI),
+            spinRate: rand(0.4) - 0.2,
+            size: 0.045 + rand(0.03),
+            hue: [185, 200, 310, 45, 130, 260, 170][i],
+            kindA: kindA,
+            kindB: kindB,
+            morphSpeed: 0.1 + rand(0.1),
+            bobRate: 0.25 + rand(0.3)
+          });
+        }
+        spawnCrystal(elapsed, true);
+        spawnCrystal(elapsed + 0.15, true);
+        spawnCrystal(elapsed + 0.35, Math.random() < 0.5);
+        electro.length = 0;
+        desertUntil = elapsed + 28 + rand(16);
+        phase = 'desert';
+        setDesertAudio(true);
+      }
+
+      function exitDesertPhase(elapsed) {
+        phase = 'tunnel';
+        crystals.length = 0;
+        nextDesertAt = elapsed + 120 + rand(90);
+        electro.length = 0;
+        nextElectroAt = elapsed + 0.8;
+        // Fresh corridor art after the landscape
+        if (!artFading) beginArtCrossfade((styleId + 1) % 7, elapsed);
+        setDesertAudio(false);
+      }
+
+      function updatePhase(elapsed, dt) {
+        if (phaseFade > 0 && phaseFadeDir !== 0) {
+          phaseFade += phaseFadeDir * dt * 0.85;
+          if (phaseFadeDir > 0 && phaseFade >= 1) {
+            phaseFade = 1;
+            if (phase === 'tunnel') enterDesertPhase(elapsed);
+            else exitDesertPhase(elapsed);
+            phaseFadeDir = -1;
+          } else if (phaseFadeDir < 0 && phaseFade <= 0) {
+            phaseFade = 0;
+            phaseFadeDir = 0;
+          }
+          return;
+        }
+        if (phase === 'tunnel' && elapsed >= nextDesertAt) {
+          phaseFade = 0.001;
+          phaseFadeDir = 1;
+        } else if (phase === 'desert' && elapsed >= desertUntil) {
+          phaseFade = 0.001;
+          phaseFadeDir = 1;
+        }
+      }
+
+      function renderDesertFrame(ctx, w, h, elapsed, dt) {
+        updateTerrainBlend(elapsed);
+        const speed = 38 + Math.sin(elapsed * 0.15) * 12;
+        camZ += speed * dt;
+        camX += Math.sin(elapsed * 0.11) * 18 * dt;
+
+        if (elapsed >= nextDesertPaletteAt) {
+          groundHueTarget = [320, 300, 280, 15, 175, 110, 340, 45, 200, 260, 130][irand(11)];
+          nextDesertPaletteAt = elapsed + 4.5 + rand(4);
+        }
+        let diff = ((groundHueTarget - groundHue + 540) % 360) - 180;
+        groundHue = (groundHue + diff * Math.min(1, dt * 0.38) + dt * 10) % 360;
+
+        if (elapsed >= nextDesertInvertAt) {
+          desertInvert = 0.35 + rand(0.4);
+          nextDesertInvertAt = elapsed + 5 + rand(5);
+          groundHueTarget = (groundHue + 120 + rand(80)) % 360;
+        }
+        if (desertInvert > 0.001) desertInvert *= Math.pow(0.2, dt);
+        else desertInvert = 0;
+
+        if (!terrainFading && elapsed >= nextDesertArtAt) {
+          desertStyle = (desertStyle + 1) % 6;
+          beginTerrainCrossfade(desertStyle, elapsed);
+          nextDesertArtAt = elapsed + 9 + rand(7);
+        }
+
+        updateCrystals(dt, elapsed);
+
+        const zBin = Math.floor(camZ / 40);
+        if (zBin !== lastDesertWhooshZ) {
+          lastDesertWhooshZ = zBin;
+          if (Math.random() < 0.28) triggerPlaneWhoosh(0.2 + rand(0.22));
+        }
+
+        const horizon = Math.floor(h * 0.5);
+        drawDesertStars(ctx, w, h, horizon);
+        drawDesertGround(ctx, w, h, horizon);
+        drawCrystals(ctx, w, h, horizon, elapsed);
+
+        const vg = ctx.createRadialGradient(w * 0.5, h * 0.45, h * 0.25, w * 0.5, h * 0.5, h * 1.05);
+        vg.addColorStop(0, 'rgba(0,0,0,0)');
+        vg.addColorStop(1, 'rgba(0,0,0,0.42)');
+        ctx.fillStyle = vg;
+        ctx.fillRect(0, 0, w, h);
+
+        if (desertInvert > 0.02) {
+          ctx.globalCompositeOperation = 'difference';
+          ctx.globalAlpha = desertInvert;
+          ctx.fillStyle = '#fff';
+          ctx.fillRect(0, horizon, w, h - horizon);
+          ctx.globalCompositeOperation = 'source-over';
+          ctx.globalAlpha = 1;
+        }
+      }
+
+      // Keep the void dark — wall lights live outside this band.
+      function hideInjection(ctx, w, h) {
+        const cx = w * 0.5;
+        const band = Math.max(10, w * 0.04);
+        const g = ctx.createLinearGradient(cx - band, 0, cx + band, 0);
+        g.addColorStop(0, 'rgba(0,0,0,0)');
+        g.addColorStop(0.25, 'rgba(0,0,0,0.5)');
+        g.addColorStop(0.5, 'rgba(0,0,0,0.95)');
+        g.addColorStop(0.75, 'rgba(0,0,0,0.5)');
+        g.addColorStop(1, 'rgba(0,0,0,0)');
+        ctx.fillStyle = g;
+        ctx.fillRect(cx - band, 0, band * 2, h);
+      }
+
+
+      // Radial-depth SBS: mono tunnel + annular parallax.
+      // Critical: (1) always start from a full mono copy so shifts never
+      // leave empty voids; (2) clip each half when presenting so cover-scale
+      // cannot shove the left eye off-frame.
+      // SBS_SWAP = true if depth feels inverted on your display.
+      const SBS_SWAP = false;
+      const SBS_LAYERS = 14;
+      const SBS_MAX_SHIFT = 0.01; // gentler — still clear, both eyes stay full
+      let stereoSbs = null;
+
+      function initStereoSbs() {
+        if (stereoSbs) return stereoSbs;
+        const canvas = document.getElementById('stereo-sbs');
+        canvas.hidden = false;
+        const ctx = canvas.getContext('2d', { alpha: false });
+        const eyeL = document.createElement('canvas');
+        const eyeR = document.createElement('canvas');
+        const lctx = eyeL.getContext('2d', { alpha: false });
+        const rctx = eyeR.getContext('2d', { alpha: false });
+
+        function size() {
+          const dpr = Math.min(window.devicePixelRatio || 1, 2);
+          const w = Math.max(2, (window.innerWidth * dpr) | 0);
+          const h = Math.max(2, (window.innerHeight * dpr) | 0);
+          if (canvas.width !== w || canvas.height !== h) {
+            canvas.width = w;
+            canvas.height = h;
+          }
+        }
+
+        function paintEye(dst, src, w, h, sign) {
+          if (dst.canvas.width !== w || dst.canvas.height !== h) {
+            dst.canvas.width = w;
+            dst.canvas.height = h;
+          }
+          // Full mono base first — never start from black (that caused the
+          // empty left-eye look when shifts uncovered the canvas).
+          dst.drawImage(src, 0, 0, w, h);
+
+          const cx = w * 0.5;
+          const cy = h * 0.5;
+          const rMax = Math.sqrt(cx * cx + cy * cy) + 1;
+          const maxShift = w * SBS_MAX_SHIFT;
+
+          // Outer rings = nearer walls → more parallax; inner void barely moves
+          for (let i = 0; i < SBS_LAYERS; i++) {
+            const t0 = i / SBS_LAYERS;
+            const t1 = (i + 1) / SBS_LAYERS;
+            const r0 = rMax * t0;
+            const r1 = rMax * t1;
+            const depth = (t0 + t1) * 0.5;
+            const shift = Math.round(sign * maxShift * depth * depth);
+            if (shift === 0) continue;
+
+            dst.save();
+            dst.beginPath();
+            dst.arc(cx, cy, r1, 0, Math.PI * 2);
+            if (r0 > 0.5) dst.arc(cx, cy, r0, 0, Math.PI * 2, true);
+            dst.clip('evenodd');
+            dst.drawImage(src, shift, 0);
+            // Fill the strip the shift uncovered so the eye never goes blank
+            if (shift > 0) {
+              dst.drawImage(src, 0, 0, shift, h, 0, 0, shift, h);
+            } else {
+              const s = -shift;
+              dst.drawImage(src, w - s, 0, s, h, w - s, 0, s, h);
+            }
+            dst.restore();
+          }
+        }
+
+        function drawEyeHalf(eyeCanvas, sw, sh, x0, half, dh) {
+          // Cover-scale inside a clipped half so both eyes stay centered
+          ctx.save();
+          ctx.beginPath();
+          ctx.rect(x0, 0, half, dh);
+          ctx.clip();
+          const scale = Math.max(half / sw, dh / sh);
+          const dw2 = sw * scale;
+          const dh2 = sh * scale;
+          const ox = x0 + (half - dw2) * 0.5;
+          const oy = (dh - dh2) * 0.5;
+          ctx.drawImage(eyeCanvas, 0, 0, sw, sh, ox, oy, dw2, dh2);
+          ctx.restore();
+        }
+
+        function render() {
+          size();
+          const sw = view.width;
+          const sh = view.height;
+          const signL = SBS_SWAP ? 1 : -1;
+          const signR = SBS_SWAP ? -1 : 1;
+          paintEye(lctx, view, sw, sh, signL);
+          paintEye(rctx, view, sw, sh, signR);
+
+          const dw = canvas.width;
+          const dh = canvas.height;
+          const half = (dw * 0.5) | 0;
+          ctx.fillStyle = '#000';
+          ctx.fillRect(0, 0, dw, dh);
+          drawEyeHalf(eyeL, sw, sh, 0, half, dh);
+          drawEyeHalf(eyeR, sw, sh, half, half, dh);
+        }
+
+        stereoSbs = { canvas, render, size };
+        window.addEventListener('resize', size);
+        return stereoSbs;
+      }
+
+      function presentToDisplay(srcCanvas, w, h) {
+        if (presentMode === 'vr' || presentMode === 'sbs') return;
+        const dw = display.width;
+        const dh = display.height;
+        dctx.fillStyle = '#000';
+        dctx.fillRect(0, 0, dw, dh);
+        const scale = Math.max(dw / w, dh / h);
+        const dw2 = w * scale, dh2 = h * scale;
+        dctx.drawImage(srcCanvas, (dw - dw2) * 0.5, (dh - dh2) * 0.5, dw2, dh2);
+      }
+
+      function sizeDisplay() {
+        const dpr = Math.min(window.devicePixelRatio || 1, 2);
+        if (presentMode === 'sbs') {
+          display.width = Math.floor(window.innerWidth * dpr);
+          display.height = Math.floor(window.innerHeight * dpr);
+        } else {
+          display.width = Math.floor(window.innerWidth * dpr);
+          display.height = Math.floor(window.innerHeight * dpr);
+        }
+      }
+
+      function frame(now) {
+        if (!running) return;
+        requestAnimationFrame(frame);
+
+        resize();
+        const w = view.width;
+        const h = view.height;
+        const elapsed = (now - t0) * 0.001;
+        const dt = lastNow ? Math.min(0.05, (now - lastNow) / 1000) : 0.016;
+        lastNow = now;
+
+        updatePhase(elapsed, dt);
+        updateStargateScore(elapsed);
+        updateArtBlend(elapsed);
+
+        if (phase === 'desert') {
+          renderDesertFrame(vctx, w, h, elapsed, dt);
+        } else {
+          // Slow continuous tint drift
+          const drift = elapsed * 10;
+          let th = tintHue;
+          let tgt = (tintHueTarget + drift) % 360;
+          let diff = ((tgt - th + 540) % 360) - 180;
+          tintHue = (th + diff * Math.min(1, dt * 0.35) + dt * 6) % 360;
+
+          const spd = 48 + 22 * (0.5 + 0.5 * Math.sin(elapsed * 0.11));
+          artScroll += spd * dt * 15;
+          artScrollY += 36 * dt * 13;
+
+          const colNow = Math.floor(artScroll / 18);
+          if (colNow !== lastTraverseCol) {
+            lastTraverseCol = colNow;
+            triggerTraverse(0.4);
+          }
+
+          updateElectro(elapsed, dt);
+
+          if (!artFading && now * 0.001 >= nextArtAt) {
+            styleId = (styleId + 1) % 7;
+            beginArtCrossfade(styleId, elapsed);
+            nextArtAt = now * 0.001 + 8 + Math.random() * 6;
+          }
+
+          const rush = 0.5 + 0.5 * Math.sin(elapsed * 0.07);
+          const zoom = 1.042 + rush * 0.018;
+
+          const src = bufA;
+          const dstCtx = bCtx;
+
+          dstCtx.fillStyle = '#000';
+          dstCtx.fillRect(0, 0, w, h);
+
+          dstCtx.save();
+          dstCtx.translate(w * 0.5, h * 0.5);
+          dstCtx.scale(zoom, zoom);
+          dstCtx.translate(-w * 0.5, -h * 0.5);
+          dstCtx.imageSmoothingEnabled = true;
+          dstCtx.drawImage(src, 0, 0);
+          dstCtx.restore();
+
+          dstCtx.globalCompositeOperation = 'source-atop';
+          dstCtx.fillStyle = 'hsla(' + tintHue + ',55%,38%,0.035)';
+          dstCtx.fillRect(0, 0, w, h);
+          dstCtx.fillStyle = 'hsla(' + ((tintHue + 140) % 360) + ',40%,32%,0.02)';
+          dstCtx.fillRect(0, 0, w, h);
+          dstCtx.globalCompositeOperation = 'source-over';
+
+          dstCtx.fillStyle = 'rgba(0,0,0,0.012)';
+          dstCtx.fillRect(0, 0, w, h);
+
+          stampCorridor(dstCtx, w, h);
+          stampElectronic(dstCtx, w, h, elapsed);
+
+          vctx.fillStyle = '#000';
+          vctx.fillRect(0, 0, w, h);
+          vctx.drawImage(bufB, 0, 0);
+          hideInjection(vctx, w, h);
+
+          const vg = vctx.createRadialGradient(w * 0.5, h * 0.5, h * 0.38, w * 0.5, h * 0.5, h * 1.05);
+          vg.addColorStop(0, 'rgba(0,0,0,0)');
+          vg.addColorStop(1, 'rgba(0,0,0,0.38)');
+          vctx.fillStyle = vg;
+          vctx.fillRect(0, 0, w, h);
+
+          const tc = bufA; bufA = bufB; bufB = tc;
+          const tx = aCtx; aCtx = bCtx; bCtx = tx;
+        }
+
+        // Soft whiteout when crossing into / out of desert
+        if (phaseFade > 0.001) {
+          flashEl.style.opacity = String(Math.min(1, phaseFade) * 0.92);
+          flashEl.style.mixBlendMode = 'normal';
+        } else {
+          flashEl.style.opacity = '0';
+          flashAmt = 0;
+        }
+
+        if (presentMode === 'sbs') {
+          if (stereoSbs) stereoSbs.render();
+        } else {
+          presentToDisplay(view, w, h);
+          if (presentMode === 'vr') pushTexture();
+        }
+      }
+
+      let audio = null;
+
+      function makeDelay(ctx, timeL, timeR, feedback, toneHz) {
+        const fb = Math.min(feedback, 0.38);
+        const dL = ctx.createDelay(3);
+        const dR = ctx.createDelay(3);
+        dL.delayTime.value = timeL;
+        dR.delayTime.value = timeR;
+        const fbL = ctx.createGain();
+        const fbR = ctx.createGain();
+        fbL.gain.value = fb;
+        fbR.gain.value = fb;
+        const tL = ctx.createBiquadFilter();
+        tL.type = 'lowpass';
+        tL.frequency.value = toneHz;
+        tL.Q.value = 0.7;
+        const tR = ctx.createBiquadFilter();
+        tR.type = 'lowpass';
+        tR.frequency.value = toneHz * 0.92;
+        tR.Q.value = 0.7;
+        const input = ctx.createGain();
+        const wet = ctx.createGain();
+        wet.gain.value = 0.7;
+        const merge = ctx.createChannelMerger(2);
+        input.connect(dL);
+        input.connect(dR);
+        dL.connect(tL);
+        dR.connect(tR);
+        tL.connect(fbL);
+        tR.connect(fbR);
+        fbL.connect(dR);
+        fbR.connect(dL);
+        tL.connect(merge, 0, 0);
+        tR.connect(merge, 0, 1);
+        merge.connect(wet);
+        return { input: input, wet: wet, fbL: fbL, fbR: fbR, tL: tL, tR: tR, dL: dL, dR: dR };
+      }
+
+      function startStargateScore() {
+        try {
+          const AC = window.AudioContext || window.webkitAudioContext;
+          const ctx = new AC();
+          const master = ctx.createGain();
+          master.gain.value = 0.0001;
+          const comp = ctx.createDynamicsCompressor();
+          comp.threshold.value = -18;
+          comp.knee.value = 14;
+          comp.ratio.value = 2.2;
+          comp.attack.value = 0.08;
+          comp.release.value = 0.4;
+          master.connect(comp);
+          comp.connect(ctx.destination);
+          master.gain.linearRampToValueAtTime(0.4, ctx.currentTime + 5);
+
+          // Shared long delays for the space
+          const delayWide = makeDelay(ctx, 0.72, 0.95, 0.32, 1600);
+          const delayLong = makeDelay(ctx, 1.15, 1.45, 0.28, 900);
+          const wetWide = ctx.createGain();
+          wetWide.gain.value = 0.45;
+          const wetLong = ctx.createGain();
+          wetLong.gain.value = 0.35;
+          delayWide.wet.connect(wetWide);
+          delayLong.wet.connect(wetLong);
+          wetWide.connect(master);
+          wetLong.connect(master);
+
+          function intoSpace(node, dryAmt) {
+            const dry = ctx.createGain();
+            dry.gain.value = dryAmt;
+            node.connect(dry);
+            dry.connect(master);
+            node.connect(delayWide.input);
+            node.connect(delayLong.input);
+          }
+
+          // --- Deep spaceship rumble bed ---
+          const rumbleBus = ctx.createGain();
+          rumbleBus.gain.value = 0.55;
+          const rumbleF = ctx.createBiquadFilter();
+          rumbleF.type = 'lowpass';
+          rumbleF.frequency.value = 55;
+          rumbleF.Q.value = 0.6;
+          rumbleBus.connect(rumbleF);
+          rumbleF.connect(master);
+
+          const rumble = ctx.createOscillator();
+          rumble.type = 'sine';
+          rumble.frequency.value = 20;
+          const rumble2 = ctx.createOscillator();
+          rumble2.type = 'sine';
+          rumble2.frequency.value = 40;
+          const rumble3 = ctx.createOscillator();
+          rumble3.type = 'sine';
+          rumble3.frequency.value = 30;
+          const rumble4 = ctx.createOscillator();
+          rumble4.type = 'triangle';
+          rumble4.frequency.value = 60;
+          const rumbleG = ctx.createGain();
+          rumbleG.gain.value = 0.65;
+          const r2G = ctx.createGain();
+          r2G.gain.value = 0.45;
+          const r3G = ctx.createGain();
+          r3G.gain.value = 0.35;
+          const r4G = ctx.createGain();
+          r4G.gain.value = 0.12;
+          rumble.connect(rumbleG);
+          rumble2.connect(r2G);
+          rumble3.connect(r3G);
+          rumble4.connect(r4G);
+          rumbleG.connect(rumbleBus);
+          r2G.connect(rumbleBus);
+          r3G.connect(rumbleBus);
+          r4G.connect(rumbleBus);
+          rumble.start();
+          rumble2.start();
+          rumble3.start();
+          rumble4.start();
+
+          // Engine / hull brown noise
+          const nLen = Math.floor(ctx.sampleRate * 4);
+          const nBuf = ctx.createBuffer(1, nLen, ctx.sampleRate);
+          const nData = nBuf.getChannelData(0);
+          let nLast = 0;
+          for (let i = 0; i < nLen; i++) {
+            nLast = (nLast + 0.015 * (Math.random() * 2 - 1)) / 1.015;
+            nData[i] = nLast * 4.2;
+          }
+          const brown = ctx.createBufferSource();
+          brown.buffer = nBuf;
+          brown.loop = true;
+          const brownF = ctx.createBiquadFilter();
+          brownF.type = 'lowpass';
+          brownF.frequency.value = 42;
+          brownF.Q.value = 0.7;
+          const brownF2 = ctx.createBiquadFilter();
+          brownF2.type = 'lowpass';
+          brownF2.frequency.value = 28;
+          const brownG = ctx.createGain();
+          brownG.gain.value = 0.45;
+          brown.connect(brownF);
+          brownF.connect(brownF2);
+          brownF2.connect(brownG);
+          brownG.connect(master);
+          brown.start();
+
+          // --- Desert plane / time-skirt cabin wind ---
+          // Mid band noise + slow engine throb = flying across the landscape
+          const planeBus = ctx.createGain();
+          planeBus.gain.value = 0.0001;
+          const planeLen = Math.floor(ctx.sampleRate * 3);
+          const planeBuf = ctx.createBuffer(1, planeLen, ctx.sampleRate);
+          const planeData = planeBuf.getChannelData(0);
+          let pLast = 0;
+          for (let i = 0; i < planeLen; i++) {
+            const white = Math.random() * 2 - 1;
+            pLast = (pLast + 0.02 * white) / 1.02;
+            planeData[i] = pLast * 3.5 + white * 0.15;
+          }
+          const planeNoise = ctx.createBufferSource();
+          planeNoise.buffer = planeBuf;
+          planeNoise.loop = true;
+          const planeHP = ctx.createBiquadFilter();
+          planeHP.type = 'highpass';
+          planeHP.frequency.value = 90;
+          const planeBP = ctx.createBiquadFilter();
+          planeBP.type = 'bandpass';
+          planeBP.frequency.value = 420;
+          planeBP.Q.value = 0.55;
+          const planeLP = ctx.createBiquadFilter();
+          planeLP.type = 'lowpass';
+          planeLP.frequency.value = 1800;
+          planeNoise.connect(planeHP);
+          planeHP.connect(planeBP);
+          planeBP.connect(planeLP);
+          planeLP.connect(planeBus);
+          // Soft engine hum (time-traveller skirt)
+          const eng = ctx.createOscillator();
+          eng.type = 'sawtooth';
+          eng.frequency.value = 48;
+          const eng2 = ctx.createOscillator();
+          eng2.type = 'triangle';
+          eng2.frequency.value = 72;
+          eng2.detune.value = 7;
+          const engF = ctx.createBiquadFilter();
+          engF.type = 'lowpass';
+          engF.frequency.value = 160;
+          engF.Q.value = 3;
+          const engG = ctx.createGain();
+          engG.gain.value = 0.22;
+          eng.connect(engF);
+          eng2.connect(engF);
+          engF.connect(engG);
+          engG.connect(planeBus);
+          // Slow Doppler / wind LFO on cabin filter
+          const windLfo = ctx.createOscillator();
+          windLfo.type = 'sine';
+          windLfo.frequency.value = 0.07;
+          const windDepth = ctx.createGain();
+          windDepth.gain.value = 180;
+          windLfo.connect(windDepth);
+          windDepth.connect(planeBP.frequency);
+          planeBus.connect(master);
+          intoSpace(planeBus, 0.15);
+          planeNoise.start();
+          eng.start();
+          eng2.start();
+          windLfo.start();
+
+          // --- Stacked cluster (kept — through filter + delay) ---
+          const clusterBus = ctx.createGain();
+          clusterBus.gain.value = 0.08;
+          const clusterF = ctx.createBiquadFilter();
+          clusterF.type = 'lowpass';
+          clusterF.frequency.value = 700;
+          clusterF.Q.value = 1.2;
+          clusterBus.connect(clusterF);
+          intoSpace(clusterF, 0.35);
+          const clusterOscs = [];
+          const baseFreqs = [98, 103.5, 110, 116.5, 123.5, 131, 147, 155, 165, 175];
+          baseFreqs.forEach(function (f, i) {
+            const o = ctx.createOscillator();
+            o.type = i % 3 === 0 ? 'triangle' : 'sine';
+            o.frequency.value = f;
+            const g = ctx.createGain();
+            g.gain.value = 0.07 + (i % 3) * 0.015;
+            o.connect(g);
+            g.connect(clusterBus);
+            o.start();
+            clusterOscs.push({ o: o, g: g, base: f });
+          });
+
+          // --- Slow resonant synth pad A (saw → resonant LP → delay) ---
+          function makeResVoice(freqs, type) {
+            const bus = ctx.createGain();
+            bus.gain.value = 0.001;
+            const filt = ctx.createBiquadFilter();
+            filt.type = 'lowpass';
+            filt.frequency.value = 180;
+            filt.Q.value = 2.5;
+            const oscs = freqs.map(function (f, i) {
+              const o = ctx.createOscillator();
+              o.type = type;
+              o.frequency.value = f;
+              o.detune.value = (i - 1) * 6;
+              const g = ctx.createGain();
+              g.gain.value = 0.22 / freqs.length;
+              o.connect(g);
+              g.connect(filt);
+              o.start();
+              return o;
+            });
+            filt.connect(bus);
+            intoSpace(bus, 0.22);
+            return { bus: bus, filt: filt, oscs: oscs };
+          }
+
+          const padA = makeResVoice([55, 82.5, 110], 'sawtooth');
+          const padB = makeResVoice([65.4, 98, 130.8], 'sawtooth');
+          const padC = makeResVoice([73.4, 110, 146.8], 'triangle');
+
+          // No breath LFOs — they read as a heartbeat throb.
+
+          // --- Slow rising resonant lead (filter open, not a scream) ---
+          const lead = ctx.createOscillator();
+          lead.type = 'sawtooth';
+          lead.frequency.value = 55;
+          const leadWarm = ctx.createOscillator();
+          leadWarm.type = 'triangle';
+          leadWarm.frequency.value = 55;
+          leadWarm.detune.value = 5;
+          const leadMix = ctx.createGain();
+          const lg1 = ctx.createGain();
+          lg1.gain.value = 0.35;
+          const lg2 = ctx.createGain();
+          lg2.gain.value = 0.4;
+          lead.connect(lg1);
+          leadWarm.connect(lg2);
+          lg1.connect(leadMix);
+          lg2.connect(leadMix);
+          const leadF = ctx.createBiquadFilter();
+          leadF.type = 'lowpass';
+          leadF.frequency.value = 200;
+          leadF.Q.value = 8;
+          const leadG = ctx.createGain();
+          leadG.gain.value = 0.001;
+          leadMix.connect(leadF);
+          leadF.connect(leadG);
+          intoSpace(leadG, 0.08);
+          lead.start();
+          leadWarm.start();
+
+          // Disturbing choir — close dissonant voices into the long delay
+          const choir = [];
+          // Slightly beating / off intervals for unease
+          [98, 103.5, 123.5, 146.8, 155, 185, 196, 233].forEach(function (f, i) {
+            const o = ctx.createOscillator();
+            o.type = i % 3 === 0 ? 'triangle' : 'sine';
+            o.frequency.value = f;
+            o.detune.value = (i % 2 ? -6 : 5);
+            const g = ctx.createGain();
+            g.gain.value = 0.001;
+            const f2 = ctx.createBiquadFilter();
+            f2.type = 'bandpass';
+            f2.frequency.value = f * 1.8;
+            f2.Q.value = 2.5;
+            o.connect(f2);
+            f2.connect(g);
+            g.connect(delayLong.input);
+            g.connect(delayWide.input);
+            o.start();
+            choir.push({ o: o, g: g, f: f2, base: f });
+          });
+
+          // Plane-traverse whooshes — noise through sweeping bandpass
+          const travBus = ctx.createGain();
+          travBus.gain.value = 0.55;
+          const travWet = ctx.createGain();
+          travWet.gain.value = 0.7;
+          travBus.connect(travWet);
+          travWet.connect(delayWide.input);
+          const travDry = ctx.createGain();
+          travDry.gain.value = 0.35;
+          travBus.connect(travDry);
+          travDry.connect(master);
+
+          audio = {
+            ctx: ctx,
+            master: master,
+            rumble: rumble,
+            rumble2: rumble2,
+            rumble3: rumble3,
+            rumble4: rumble4,
+            rumbleBus: rumbleBus,
+            rumbleG: rumbleG,
+            brownG: brownG,
+            brownF: brownF,
+            planeBus: planeBus,
+            planeBP: planeBP,
+            eng: eng,
+            eng2: eng2,
+            engF: engF,
+            engG: engG,
+            desertAudio: false,
+            clusterOscs: clusterOscs,
+            clusterF: clusterF,
+            clusterBus: clusterBus,
+            padA: padA,
+            padB: padB,
+            padC: padC,
+            lead: lead,
+            leadWarm: leadWarm,
+            leadF: leadF,
+            leadG: leadG,
+            choir: choir,
+            travBus: travBus,
+            delayWide: delayWide,
+            delayLong: delayLong,
+            wetWide: wetWide,
+            wetLong: wetLong,
+            nextClusterShift: 6,
+            nextPadSwap: 8,
+            nextLead: 9999,
+            nextChoirAt: 18,
+            choirUntil: 0,
+            padState: 0,
+            lastTrav: 0,
+            lastZap: 0
+          };
+
+          // Fade pads in slowly
+          const t0 = ctx.currentTime;
+          padA.bus.gain.linearRampToValueAtTime(0.2, t0 + 8);
+          padB.bus.gain.setValueAtTime(0.001, t0);
+          padB.bus.gain.linearRampToValueAtTime(0.12, t0 + 18);
+          padC.bus.gain.setValueAtTime(0.001, t0);
+          padC.bus.gain.linearRampToValueAtTime(0.1, t0 + 28);
+        } catch (e) {
+          console.warn('audio failed', e);
+        }
+      }
+
+      function setDesertAudio(on) {
+        if (!audio || !audio.planeBus) return;
+        const t = audio.ctx.currentTime;
+        audio.desertAudio = !!on;
+        if (on) {
+          audio.planeBus.gain.cancelScheduledValues(t);
+          audio.planeBus.gain.setValueAtTime(audio.planeBus.gain.value, t);
+          audio.planeBus.gain.linearRampToValueAtTime(0.16, t + 2.5);
+          audio.rumbleBus.gain.setTargetAtTime(0.95, t, 2);
+          audio.brownG.gain.setTargetAtTime(0.7, t, 2);
+          audio.brownF.frequency.setTargetAtTime(48, t, 2);
+          audio.engG.gain.setTargetAtTime(0.12, t, 2);
+          audio.clusterBus.gain.setTargetAtTime(0.03, t, 2);
+          audio.padA.bus.gain.setTargetAtTime(0.04, t, 2);
+          audio.padB.bus.gain.setTargetAtTime(0.03, t, 2);
+          audio.padC.bus.gain.setTargetAtTime(0.03, t, 2);
+          audio.eng.frequency.setTargetAtTime(52, t, 2);
+          audio.eng2.frequency.setTargetAtTime(78, t, 2);
+          audio.engF.frequency.setTargetAtTime(190, t, 2);
+          audio.planeBP.frequency.setTargetAtTime(380, t, 2);
+        } else {
+          audio.planeBus.gain.cancelScheduledValues(t);
+          audio.planeBus.gain.setValueAtTime(audio.planeBus.gain.value, t);
+          audio.planeBus.gain.linearRampToValueAtTime(0.0001, t + 2.2);
+          audio.rumbleBus.gain.setTargetAtTime(0.55, t, 2.5);
+          audio.brownG.gain.setTargetAtTime(0.42, t, 2.5);
+          audio.clusterBus.gain.setTargetAtTime(0.1, t, 2.5);
+          if (audio.engG) audio.engG.gain.setTargetAtTime(0.22, t, 2);
+        }
+      }
+
+      function updateStargateScore(elapsed) {
+
+        if (!audio || !audio.ctx) return;
+        const t = audio.ctx.currentTime;
+        const a = audio;
+        const journey = Math.min(1, elapsed / 140);
+        const desert = a.desertAudio || phase === 'desert';
+
+        // Steady deep space rumble — deeper + cabin wind when over the desert
+        a.rumble.frequency.setTargetAtTime(desert ? 16 : 20, t, 3);
+        a.rumble2.frequency.setTargetAtTime(desert ? 32 : 40, t, 3);
+        a.rumble3.frequency.setTargetAtTime(desert ? 24 : 30, t, 3);
+        a.rumble4.frequency.setTargetAtTime(desert ? 48 : 60, t, 3);
+        if (desert) {
+          a.rumbleBus.gain.setTargetAtTime(0.95, t, 2);
+          a.brownG.gain.setTargetAtTime(0.68, t, 2);
+        }
+        if (!desert) {
+          a.rumbleBus.gain.setTargetAtTime(0.5 + journey * 0.12, t, 2.5);
+          a.brownG.gain.setTargetAtTime(0.4 + journey * 0.08, t, 2.5);
+          a.brownF.frequency.setTargetAtTime(42 + journey * 8, t, 3);
+        } else if (a.planeBus) {
+          // Keep plane cabin alive; slow wind drift
+          a.planeBP.frequency.setTargetAtTime(320 + Math.sin(elapsed * 0.11) * 90, t, 1.5);
+          a.eng.frequency.setTargetAtTime(46 + Math.sin(elapsed * 0.08) * 6, t, 2);
+          a.eng2.frequency.setTargetAtTime(70 + Math.sin(elapsed * 0.09) * 8, t, 2);
+        }
+        // Kill lead climbs — they pulse in and out like a heartbeat
+        a.leadG.gain.setTargetAtTime(0.0001, t, 1);
+
+        // Cluster drift — stacked voices they liked
+        if (elapsed > a.nextClusterShift) {
+          a.nextClusterShift = elapsed + 7 + Math.random() * 6;
+          const centre = 95 + journey * 70 + Math.random() * 25;
+          a.clusterOscs.forEach(function (c, i) {
+            const spread = (i - 4.5) * (1.1 + journey * 2);
+            c.o.frequency.setTargetAtTime(centre + spread * 3.2, t, 3.5);
+          });
+          a.clusterF.frequency.setTargetAtTime(400 + journey * 700, t, 3);
+          a.clusterF.Q.setTargetAtTime(2.2 + journey * 2, t, 2);
+          a.clusterBus.gain.setTargetAtTime((phase === 'desert' ? 0.03 : 0.12) + journey * 0.12, t, 2);
+        }
+
+        // Pads: very slow drift, steady Q (no throb)
+        const sweepA = 140 + journey * 200;
+        const sweepB = 110 + journey * 180;
+        const sweepC = 160 + journey * 150;
+        a.padA.filt.frequency.setTargetAtTime(sweepA, t, 4);
+        a.padA.filt.Q.setTargetAtTime(2, t, 3);
+        a.padB.filt.frequency.setTargetAtTime(sweepB, t, 4);
+        a.padB.filt.Q.setTargetAtTime(2.2, t, 3);
+        a.padC.filt.frequency.setTargetAtTime(sweepC, t, 4);
+        a.padC.filt.Q.setTargetAtTime(1.8, t, 3);
+        // Keep pads quieter under the rumble (mute further over desert)
+        if (!desert) {
+          a.padA.bus.gain.setTargetAtTime(0.1, t, 3);
+          a.padB.bus.gain.setTargetAtTime(0.06, t, 3);
+          a.padC.bus.gain.setTargetAtTime(0.05, t, 3);
+        }
+
+        // Crossfade pad levels over long phrases
+        if (elapsed > a.nextPadSwap) {
+          a.nextPadSwap = elapsed + 14 + Math.random() * 10;
+          a.padState = (a.padState + 1) % 3;
+          const levels = [
+            [0.22, 0.08, 0.1],
+            [0.1, 0.2, 0.12],
+            [0.12, 0.1, 0.2]
+          ][a.padState];
+          a.padA.bus.gain.setTargetAtTime(levels[0], t, 4);
+          a.padB.bus.gain.setTargetAtTime(levels[1], t, 4);
+          a.padC.bus.gain.setTargetAtTime(levels[2], t, 4);
+
+          // Occasionally retune a pad for colour change
+          if (Math.random() > 0.4) {
+            const roots = [55, 61.7, 65.4, 73.4, 82.5];
+            const root = roots[(Math.random() * roots.length) | 0];
+            a.padA.oscs[0].frequency.setTargetAtTime(root, t, 5);
+            a.padA.oscs[1].frequency.setTargetAtTime(root * 1.5, t, 5);
+            a.padA.oscs[2].frequency.setTargetAtTime(root * 2, t, 5);
+          }
+        }
+
+        // Very slow, very quiet resonant climb
+        if (elapsed > a.nextLead) {
+          a.nextLead = elapsed + 50 + Math.random() * 35;
+          const startF = 42 + Math.random() * 12;
+          const endF = 90 + journey * 70 + Math.random() * 30;
+          const dur = 48 + Math.random() * 24;
+          a.lead.frequency.cancelScheduledValues(t);
+          a.leadWarm.frequency.cancelScheduledValues(t);
+          a.lead.frequency.setValueAtTime(startF, t);
+          a.leadWarm.frequency.setValueAtTime(startF, t);
+          a.lead.frequency.linearRampToValueAtTime(endF, t + dur);
+          a.leadWarm.frequency.linearRampToValueAtTime(endF, t + dur);
+          a.leadF.frequency.cancelScheduledValues(t);
+          a.leadF.frequency.setValueAtTime(120, t);
+          a.leadF.frequency.linearRampToValueAtTime(450 + journey * 350, t + dur * 0.7);
+          a.leadF.frequency.linearRampToValueAtTime(180, t + dur);
+          a.leadF.Q.setTargetAtTime(5 + journey * 3, t, 2);
+          a.leadG.gain.cancelScheduledValues(t);
+          a.leadG.gain.setValueAtTime(0.001, t);
+          a.leadG.gain.linearRampToValueAtTime(0.022 + journey * 0.012, t + 8);
+          a.leadG.gain.setValueAtTime(0.018, t + dur * 0.75);
+          a.leadG.gain.linearRampToValueAtTime(0.001, t + dur + 4);
+        }
+
+        // Creepy choir — silent most of the time, Ligeti-ish swells
+        if (elapsed >= a.nextChoirAt) {
+          a.choirUntil = elapsed + 8 + Math.random() * 10;
+          a.nextChoirAt = a.choirUntil + (phase === 'desert' ? 20 : 10) + Math.random() * (phase === 'desert' ? 24 : 18);
+          // Retune to a close dissonant cluster
+          const centre = 110 + Math.random() * 40;
+          a.choir.forEach(function (c, i) {
+            const offs = (i - 3.5) * (1.8 + Math.random() * 1.2);
+            c.o.frequency.setTargetAtTime(centre + offs * 3.5, t, 2.5);
+            c.f.frequency.setTargetAtTime(centre * (1.4 + i * 0.08), t, 2);
+          });
+        }
+        const choirOn = elapsed < (a.choirUntil || 0);
+        const choirAmp = choirOn ? ((phase === 'desert' ? 0.012 : 0.024) + journey * 0.014) : 0.0001;
+        a.choir.forEach(function (c, i) {
+          const wave = choirOn ? (0.55 + 0.45 * Math.sin(elapsed * (0.11 + i * 0.03) + i)) : 0;
+          c.g.gain.setTargetAtTime(choirAmp * (0.35 + wave * 0.65), t, choirOn ? 1.8 : 2.5);
+        });
+
+        // Delay feedback — steady
+        const fb = 0.24 + journey * 0.05;
+        a.delayWide.fbL.gain.setTargetAtTime(Math.min(0.36, fb), t, 2);
+        a.delayWide.fbR.gain.setTargetAtTime(Math.min(0.36, fb * 0.95), t, 2);
+        a.delayLong.fbL.gain.setTargetAtTime(Math.min(0.34, fb * 0.9), t, 2);
+        a.wetWide.gain.setTargetAtTime(0.35 + journey * 0.15, t, 2);
+        a.wetLong.gain.setTargetAtTime(0.28 + journey * 0.12, t, 2);
+      }
+
+      // Soft bed whoosh when art columns advance
+      function triggerTraverse(intensity) {
+        triggerPlaneWhoosh((intensity || 0.4) * 0.55, 0.045);
+      }
+
+      // Plane-of-light: filtered white/pink noise sweeping past — no oscillators
+      function triggerPlaneWhoosh(intensity, minGap) {
+        if (!audio || !audio.ctx) return;
+        const ctx = audio.ctx;
+        const t = ctx.currentTime;
+        const gap = minGap != null ? minGap : 0.1;
+        if (t - (audio.lastZap || 0) < gap) return;
+        audio.lastZap = t;
+        intensity = Math.max(0.2, Math.min(1.2, intensity || 0.5));
+
+        const dur = 0.22 + intensity * 0.38;
+        const len = Math.ceil(ctx.sampleRate * dur);
+        const buf = ctx.createBuffer(1, len, ctx.sampleRate);
+        const data = buf.getChannelData(0);
+        let last = 0;
+        for (let i = 0; i < len; i++) {
+          // pink-ish noise
+          last = (last + 0.02 * (Math.random() * 2 - 1)) / 1.02;
+          const white = Math.random() * 2 - 1;
+          const env = Math.sin((i / len) * Math.PI); // swell through the plane
+          data[i] = (last * 3.2 + white * 0.55) * env;
+        }
+
+        const src = ctx.createBufferSource();
+        src.buffer = buf;
+
+        const bp = ctx.createBiquadFilter();
+        bp.type = 'bandpass';
+        bp.Q.value = 1.1 + intensity * 0.8;
+        // Doppler-ish: low → high → low (sheet rushing past)
+        const fLo = 280 + Math.random() * 200;
+        const fHi = 1600 + intensity * 2200 + Math.random() * 800;
+        bp.frequency.setValueAtTime(fLo, t);
+        bp.frequency.exponentialRampToValueAtTime(fHi, t + dur * 0.45);
+        bp.frequency.exponentialRampToValueAtTime(Math.max(200, fLo * 0.85), t + dur);
+
+        const hp = ctx.createBiquadFilter();
+        hp.type = 'highpass';
+        hp.frequency.value = 180;
+
+        const g = ctx.createGain();
+        g.gain.setValueAtTime(0.0001, t);
+        g.gain.exponentialRampToValueAtTime(0.11 * intensity, t + 0.04);
+        g.gain.exponentialRampToValueAtTime(0.0001, t + dur);
+
+        const pan = ctx.createStereoPanner ? ctx.createStereoPanner() : null;
+        src.connect(hp);
+        hp.connect(bp);
+        bp.connect(g);
+        if (pan) {
+          const side = Math.random() < 0.5 ? -1 : 1;
+          pan.pan.setValueAtTime(side * 0.15, t);
+          pan.pan.linearRampToValueAtTime(side * 0.75, t + dur * 0.5);
+          pan.pan.linearRampToValueAtTime(side * 0.2, t + dur);
+          g.connect(pan);
+          pan.connect(audio.travBus);
+        } else {
+          g.connect(audio.travBus);
+        }
+        src.start(t);
+        src.stop(t + dur + 0.03);
+      }
+
+
+      // Soft deep thud — zone shifts / comets (sub + muted noise, no scream)
+      function triggerDeepThud(intensity) {
+        if (!audio || !audio.ctx) return;
+        const ctx = audio.ctx;
+        const t = ctx.currentTime;
+        if (t - (audio.lastThud || 0) < 0.35) return;
+        audio.lastThud = t;
+        intensity = Math.max(0.2, Math.min(1, intensity || 0.4));
+
+        const o = ctx.createOscillator();
+        o.type = 'sine';
+        o.frequency.setValueAtTime(48, t);
+        o.frequency.exponentialRampToValueAtTime(22, t + 0.45);
+        const g = ctx.createGain();
+        g.gain.setValueAtTime(0.0001, t);
+        g.gain.exponentialRampToValueAtTime(0.14 * intensity, t + 0.02);
+        g.gain.exponentialRampToValueAtTime(0.0001, t + 0.55);
+        const lp = ctx.createBiquadFilter();
+        lp.type = 'lowpass';
+        lp.frequency.value = 90;
+        o.connect(lp);
+        lp.connect(g);
+        g.connect(audio.master);
+        o.start(t);
+        o.stop(t + 0.6);
+
+        // soft body thump noise
+        const dur = 0.35;
+        const len = Math.ceil(ctx.sampleRate * dur);
+        const buf = ctx.createBuffer(1, len, ctx.sampleRate);
+        const data = buf.getChannelData(0);
+        let last = 0;
+        for (let i = 0; i < len; i++) {
+          last = (last + 0.03 * (Math.random() * 2 - 1)) / 1.03;
+          data[i] = last * 4 * Math.sin((i / len) * Math.PI);
+        }
+        const src = ctx.createBufferSource();
+        src.buffer = buf;
+        const bp = ctx.createBiquadFilter();
+        bp.type = 'lowpass';
+        bp.frequency.value = 120;
+        const ng = ctx.createGain();
+        ng.gain.setValueAtTime(0.0001, t);
+        ng.gain.exponentialRampToValueAtTime(0.08 * intensity, t + 0.02);
+        ng.gain.exponentialRampToValueAtTime(0.0001, t + dur);
+        src.connect(bp);
+        bp.connect(ng);
+        ng.connect(audio.master);
+        src.start(t);
+        src.stop(t + dur + 0.02);
+      }
+
+      // Rim bloom — longer softer whoosh for rings / gates
+      function triggerRimBloom(intensity) {
+        if (!audio || !audio.ctx) return;
+        const ctx = audio.ctx;
+        const t = ctx.currentTime;
+        if (t - (audio.lastBloom || 0) < 0.25) return;
+        audio.lastBloom = t;
+        intensity = Math.max(0.2, Math.min(1.1, intensity || 0.5));
+        const dur = 0.55 + intensity * 0.45;
+        const len = Math.ceil(ctx.sampleRate * dur);
+        const buf = ctx.createBuffer(1, len, ctx.sampleRate);
+        const data = buf.getChannelData(0);
+        let last = 0;
+        for (let i = 0; i < len; i++) {
+          last = (last + 0.018 * (Math.random() * 2 - 1)) / 1.018;
+          const env = Math.sin((i / len) * Math.PI);
+          data[i] = (last * 3.5 + (Math.random() * 2 - 1) * 0.3) * env;
+        }
+        const src = ctx.createBufferSource();
+        src.buffer = buf;
+        const bp = ctx.createBiquadFilter();
+        bp.type = 'bandpass';
+        bp.Q.value = 0.7;
+        bp.frequency.setValueAtTime(220, t);
+        bp.frequency.exponentialRampToValueAtTime(900 + intensity * 600, t + dur * 0.5);
+        bp.frequency.exponentialRampToValueAtTime(280, t + dur);
+        const g = ctx.createGain();
+        g.gain.setValueAtTime(0.0001, t);
+        g.gain.exponentialRampToValueAtTime(0.09 * intensity, t + 0.08);
+        g.gain.exponentialRampToValueAtTime(0.0001, t + dur);
+        src.connect(bp);
+        bp.connect(g);
+        g.connect(audio.travBus || audio.master);
+        src.start(t);
+        src.stop(t + dur + 0.03);
+      }
+
+      // Metallic scrape for shards / sparks — filtered noise, brief
+      function triggerShardScrape(intensity) {
+        if (!audio || !audio.ctx) return;
+        const ctx = audio.ctx;
+        const t = ctx.currentTime;
+        if (t - (audio.lastScrape || 0) < 0.18) return;
+        audio.lastScrape = t;
+        intensity = Math.max(0.2, Math.min(1, intensity || 0.4));
+        const dur = 0.18 + intensity * 0.22;
+        const len = Math.ceil(ctx.sampleRate * dur);
+        const buf = ctx.createBuffer(1, len, ctx.sampleRate);
+        const data = buf.getChannelData(0);
+        for (let i = 0; i < len; i++) {
+          const env = Math.sin((i / len) * Math.PI);
+          data[i] = (Math.random() * 2 - 1) * env;
+        }
+        const src = ctx.createBufferSource();
+        src.buffer = buf;
+        const bp = ctx.createBiquadFilter();
+        bp.type = 'bandpass';
+        bp.Q.value = 4 + intensity * 3;
+        const f0 = 700 + Math.random() * 900;
+        bp.frequency.setValueAtTime(f0, t);
+        bp.frequency.exponentialRampToValueAtTime(f0 * (1.4 + Math.random()), t + dur);
+        const g = ctx.createGain();
+        g.gain.setValueAtTime(0.0001, t);
+        g.gain.exponentialRampToValueAtTime(0.055 * intensity, t + 0.02);
+        g.gain.exponentialRampToValueAtTime(0.0001, t + dur);
+        const pan = ctx.createStereoPanner ? ctx.createStereoPanner() : null;
+        src.connect(bp);
+        bp.connect(g);
+        if (pan) {
+          pan.pan.setValueAtTime(Math.random() < 0.5 ? -0.6 : 0.6, t);
+          g.connect(pan);
+          pan.connect(audio.travBus || audio.master);
+        } else {
+          g.connect(audio.travBus || audio.master);
+        }
+        src.start(t);
+        src.stop(t + dur + 0.02);
+      }
+
+      function triggerElectroZap(intensity) {
+        triggerPlaneWhoosh(intensity);
+      }
+
+      function startVoyage(modeName) {
+        presentMode = modeName;
+        gate.hidden = true;
+        document.body.classList.remove('mode-flat', 'mode-sbs', 'mode-vr');
+        document.body.classList.add('mode-' + modeName);
+        styleId = 0;
+        paintArtwork(styleId, artFrontCtx);
+        paintArtwork((styleId + 1) % 7, artBackCtx);
+        artFading = false;
+        artBlend = 1;
+        tintHue = 200;
+        tintHueTarget = 220;
+        artScroll = 0;
+        artScrollY = 0;
+        lastTraverseCol = 0;
+        electro.length = 0;
+        nextElectroAt = 0.5;
+        nextZoneAt = 5;
+        zoneKind = 'sheets';
+        zoneIdx = 0;
+        phase = 'tunnel';
+        nextDesertAt = 150 + Math.random() * 60;
+        desertUntil = 0;
+        phaseFade = 0;
+        phaseFadeDir = 0;
+        crystals.length = 0;
+        faceReady = false;
+        resize();
+        sizeDisplay();
+        if (presentMode === 'sbs') {
+          initStereoSbs();
+          if (stereoSbs) stereoSbs.size();
+        }
+        t0 = performance.now();
+        lastNow = 0;
+        nextArtAt = 5;
+        flashAmt = 0;
+        running = true;
+        startStargateScore();
+
+        if (presentMode === 'vr') {
+          display.hidden = true;
+          const tube = document.getElementById('tube');
+          if (tube) {
+            tube.setAttribute('material', 'shader: flat; src: #view; side: back; npot: true');
+          }
+          const enter = function () {
+            if (sceneEl.enterVR) sceneEl.enterVR();
+          };
+          if (sceneEl.hasLoaded) setTimeout(enter, 500);
+          else sceneEl.addEventListener('loaded', function () { setTimeout(enter, 500); });
+        } else {
+          display.hidden = false;
+          if (document.documentElement.requestFullscreen) {
+            document.documentElement.requestFullscreen().catch(function () {});
+          }
+        }
+        requestAnimationFrame(frame);
+      }
+
+      document.getElementById('btnFlat').addEventListener('click', function () { startVoyage('flat'); });
+      document.getElementById('btnSbs').addEventListener('click', function () { startVoyage('sbs'); });
+      document.getElementById('btnVr').addEventListener('click', function () { startVoyage('vr'); });
+
+      window.addEventListener('resize', function () {
+        if (running && presentMode !== 'vr') sizeDisplay();
+      });
+    })();
+  </script>
+</body>
+</html>
