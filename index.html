@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Stargate 49 — Voyage</title>
+  <title>Stargate 51 — Voyage</title>
   <script src="https://aframe.io/releases/1.5.0/aframe.min.js"></script>
   <style>
     html, body { margin: 0; height: 100%; overflow: hidden; background: #000; }
@@ -106,7 +106,7 @@
 <body>
   <div id="gate">
     <h1>Enter the Star Gate</h1>
-    <p class="sub">stargate49 · Quest: HTTPS + VR driven by headset frame loop</p>
+    <p class="sub">stargate51 · VR gate locked in the room — look around freely</p>
     <div id="serveWarn" role="alert"></div>
     <div class="btns">
       <button type="button" id="btnFlat">Enter<small>fullscreen tunnel</small></button>
@@ -127,39 +127,77 @@
     vr-mode-ui="enabled: true"
     device-orientation-permission-ui="enabled: false"
     loading-screen="enabled: false"
-    webxr="optionalFeatures: local-floor, bounded-floor"
+    webxr="referenceSpaceType: local-floor; optionalFeatures: local-floor, bounded-floor"
   >
-    <a-entity id="rig" position="0 1.6 0">
+    <!-- WORLD screen: direct child of scene — NOT under camera or rig -->
+    <a-plane
+      id="tube"
+      width="16"
+      height="9"
+      position="0 1.6 -3.4"
+      rotation="0 0 0"
+      material="shader: flat; color: #111; side: double"
+      world-fixed-screen="dist: 3.4; y: 1.6"
+      voyage-screen="canvas: #view"
+    ></a-plane>
+
+    <a-entity id="rig" position="0 0 0">
       <a-camera
         id="cam"
-        look-controls="enabled: true; pointerLockEnabled: false"
+        position="0 1.6 0"
+        look-controls="enabled: true; pointerLockEnabled: false; magicWindowTrackingEnabled: false"
         wasd-controls="enabled: false"
         fov="90"
         near="0.05"
         far="80"
-      >
-        <a-plane
-          id="tube"
-          width="16"
-          height="9"
-          position="0 0 -4.5"
-          material="shader: flat; color: #000; side: double"
-          voyage-screen="canvas: #view"
-        ></a-plane>
-      </a-camera>
+      ></a-camera>
     </a-entity>
     <a-sky color="#000000"></a-sky>
   </a-scene>
 
     <script>
+    /**
+     * Pin the voyage screen in WORLD space every frame AFTER headset pose
+     * (tock). Parent must be a-scene — never camera/rig — or looking around
+     * drags the gate with your head.
+     */
+    AFRAME.registerComponent('world-fixed-screen', {
+      schema: {
+        dist: { type: 'number', default: 3.4 },
+        y: { type: 'number', default: 1.6 }
+      },
+      init: function () {
+        this._pinned = false;
+      },
+      tick: function () {
+        this.pin();
+      },
+      tock: function () {
+        // Runs after camera/XR pose — re-assert world pose so nothing overrides us
+        this.pin();
+      },
+      pin: function () {
+        const scene = this.el.sceneEl;
+        if (!scene) return;
+        if (this.el.parentNode !== scene) {
+          scene.appendChild(this.el);
+        }
+        const o3 = this.el.object3D;
+        o3.position.set(0, this.data.y, -this.data.dist);
+        o3.rotation.set(0, 0, 0);
+        o3.quaternion.set(0, 0, 0, 1);
+        o3.scale.set(1, 1, 1);
+        o3.updateMatrix();
+      }
+    });
+
     AFRAME.registerComponent('voyage-screen', {
       schema: { canvas: { type: 'selector' } },
       init: function () {
         this._map = null;
       },
-      tick: function (t) {
+      tick: function () {
         try {
-          // Quest WebXR often stops window.requestAnimationFrame — drive voyage here
           if (typeof window.__stargateVoyageTick === 'function') {
             window.__stargateVoyageTick(performance.now());
           }
@@ -189,8 +227,7 @@
     });
 
     /**
-     * stargate49 — Quest freeze fix: voyage steps on A-Frame/XR ticks (not only window rAF).
-     * enterVR() runs first on the click (before heavy startVoyage work).
+     * stargate51 — voyage screen is scene-rooted and world-pinned (not head-locked).
      */
     (function () {
       const gate = document.getElementById('gate');
@@ -209,7 +246,7 @@
       const hostHint = (location.hostname && location.hostname !== 'localhost' && location.hostname !== '127.0.0.1')
         ? location.hostname
         : '192.168.1.76';
-      const httpsUrl = 'https://' + hostHint + ':8900/stargate49.html';
+      const httpsUrl = 'https://' + hostHint + ':8900/stargate51.html';
 
       function showOriginWarn(html) {
         if (!serveWarn) return;
