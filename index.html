@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Stargate 43 — Voyage</title>
+  <title>Stargate 45 — Voyage</title>
   <script src="https://aframe.io/releases/1.5.0/aframe.min.js"></script>
   <style>
     html, body { margin: 0; height: 100%; overflow: hidden; background: #000; }
@@ -74,7 +74,7 @@
 <body>
   <div id="gate">
     <h1>Enter the Star Gate</h1>
-    <p class="sub">stargate43 · VR upright tunnel (not sideways)</p>
+    <p class="sub">stargate45 · VR = same voyage as flat (screen ahead)</p>
     <div class="btns">
       <button type="button" id="btnFlat">Enter<small>fullscreen tunnel</small></button>
       <button type="button" id="btnSbs">3D<small>depth tunnel · SBS</small></button>
@@ -98,49 +98,36 @@
     </a-assets>
 
     <!--
-      Upright cylinder (default Y-axis). Camera sits inside and looks horizontally.
-      NEVER use rotation 0 0 90 — that lays the tube on its side and the
-      tunnel becomes a flat horizontal band.
-      rotation Y ≈ 90 aligns the canvas centre (vanishing point) ahead (−Z).
+      VR shows the same 2D voyage as flat mode on a big screen locked to the
+      headset. Wrapping that image on a cylinder always skewed the walls
+      (horizontal bands / wrong tilt). This keeps left/right walls vertical.
     -->
-    <a-entity
-      id="tube"
-      geometry="primitive: cylinder; radius: 4.5; height: 12; segmentsRadial: 64; openEnded: true"
-      material="shader: flat; src: #view; side: back; npot: true"
-      position="0 1.5 0"
-      rotation="0 90 0"
-    ></a-entity>
-
     <a-entity id="rig" position="0 1.5 0">
       <a-camera
         id="cam"
-        look-controls="enabled: true; pointerLockEnabled: false"
+        look-controls="enabled: false"
         wasd-controls="enabled: false"
-        fov="100"
+        fov="90"
         near="0.05"
         far="80"
-      ></a-camera>
+      >
+        <a-entity
+          id="tube"
+          geometry="primitive: plane; width: 20; height: 11.25"
+          material="shader: flat; src: #view; side: double; npot: true; transparent: false"
+          position="0 0 -6"
+          rotation="0 0 0"
+        ></a-entity>
+      </a-camera>
     </a-entity>
 
-    <!-- Cap the open ends so you don't stare into empty void up/down -->
-    <a-entity
-      id="vr-cap-top"
-      geometry="primitive: cylinder; radius: 4.55; height: 0.08; segmentsRadial: 32"
-      material="shader: flat; color: #000; side: double"
-      position="0 7.5 0"
-    ></a-entity>
-    <a-entity
-      id="vr-cap-bot"
-      geometry="primitive: cylinder; radius: 4.55; height: 0.08; segmentsRadial: 32"
-      material="shader: flat; color: #000; side: double"
-      position="0 -4.5 0"
-    ></a-entity>
+    <a-sky color="#000000"></a-sky>
   </a-scene>
 
   <script>
     /**
-     * stargate43 — more weird outward effects (forks, ribbons, wall glyphs,
-     * art slits) still dim and born outside the void.
+     * stargate45 — VR uses a headset-locked flat screen of the same voyage
+     * canvas (no cylinder wrap). Walls stay vertical like Enter / 3D modes.
      */
     (function () {
       const gate = document.getElementById('gate');
@@ -450,9 +437,21 @@
         const tube = document.getElementById('tube');
         if (!tube) return;
         const mesh = tube.getObject3D('mesh');
-        if (mesh && mesh.material && mesh.material.map) {
-          mesh.material.map.needsUpdate = true;
+        if (!mesh || !mesh.material) return;
+        const mat = mesh.material;
+        if (mat.map) {
+          // Exact flat-mode orientation — no UV rotation / roll
+          mat.map.rotation = 0;
+          mat.map.center.set(0, 0);
+          mat.map.offset.set(0, 0);
+          mat.map.repeat.set(1, 1);
+          mat.map.flipY = true;
+          mat.map.needsUpdate = true;
         }
+        // Keep the screen square-on in front of the eyes
+        mesh.rotation.set(0, 0, 0);
+        tube.object3D.position.set(0, 0, -6);
+        tube.object3D.rotation.set(0, 0, 0);
       }
 
       // Stretch one art column into a vertical slit, scrolling upward only
@@ -2693,19 +2692,23 @@
 
         if (presentMode === 'vr') {
           display.hidden = true;
+          const rig = document.getElementById('rig');
+          if (rig) rig.setAttribute('rotation', '0 0 0');
           const tube = document.getElementById('tube');
           if (tube) {
-            // side:back = interior of upright cylinder; keep Y rotation so VP is ahead
-            tube.setAttribute(
-              'material',
-              'shader: flat; src: #view; side: back; npot: true'
-            );
-            tube.setAttribute('rotation', '0 90 0');
             tube.setAttribute(
               'geometry',
-              'primitive: cylinder; radius: 4.5; height: 12; segmentsRadial: 64; openEnded: true'
+              'primitive: plane; width: 20; height: 11.25'
+            );
+            tube.setAttribute('position', '0 0 -6');
+            tube.setAttribute('rotation', '0 0 0');
+            tube.setAttribute(
+              'material',
+              'shader: flat; src: #view; side: double; npot: true'
             );
           }
+          setTimeout(pushTexture, 100);
+          setTimeout(pushTexture, 500);
           const enter = function () {
             if (sceneEl.enterVR) sceneEl.enterVR();
           };
