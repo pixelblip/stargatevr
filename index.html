@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Stargate 41 — Voyage</title>
+  <title>Stargate 42 — Voyage</title>
   <script src="https://aframe.io/releases/1.5.0/aframe.min.js"></script>
   <style>
     html, body { margin: 0; height: 100%; overflow: hidden; background: #000; }
@@ -73,7 +73,7 @@
 <body>
   <div id="gate">
     <h1>Enter the Star Gate</h1>
-    <p class="sub">stargate41 · fixed SBS stereo · denser FX</p>
+    <p class="sub">stargate42 · VR tunnel facing forward</p>
     <div class="btns">
       <button type="button" id="btnFlat">Enter<small>fullscreen tunnel</small></button>
       <button type="button" id="btnSbs">3D<small>depth tunnel · SBS</small></button>
@@ -101,25 +101,33 @@
         id="cam"
         look-controls="enabled: true; pointerLockEnabled: false"
         wasd-controls="enabled: false"
-        fov="90"
+        fov="95"
         near="0.05"
         far="80"
-      ></a-camera>
+      >
+        <!-- Screen locked to the headset so the voyage always faces forward
+             (cylinder-on-X was showing the tunnel sideways / mirrored). -->
+        <a-entity
+          id="tube"
+          geometry="primitive: plane; width: 16; height: 9"
+          material="shader: flat; src: #view; side: front; npot: true"
+          position="0 0 -5.5"
+        ></a-entity>
+      </a-camera>
     </a-entity>
 
-    <!-- True immersive tunnel in VR -->
+    <!-- Soft dark surround so edges don't float in void -->
     <a-entity
-      id="tube"
-      geometry="primitive: cylinder; radius: 6; height: 28; segmentsRadial: 64; openEnded: true"
-      material="shader: flat; src: #view; side: back; npot: true"
+      id="vr-shell"
+      geometry="primitive: sphere; radius: 40"
+      material="shader: flat; color: #000; side: back"
       position="0 1.5 0"
-      rotation="0 0 90"
     ></a-entity>
   </a-scene>
 
   <script>
     /**
-     * stargate41 — more weird outward effects (forks, ribbons, wall glyphs,
+     * stargate42 — more weird outward effects (forks, ribbons, wall glyphs,
      * art slits) still dim and born outside the void.
      */
     (function () {
@@ -432,6 +440,11 @@
         const mesh = tube.getObject3D('mesh');
         if (mesh && mesh.material && mesh.material.map) {
           mesh.material.map.needsUpdate = true;
+          // Keep orientation stable (no accidental flip from A-Frame)
+          if (mesh.material.map.flipY !== true) {
+            mesh.material.map.flipY = true;
+            mesh.material.map.needsUpdate = true;
+          }
         }
       }
 
@@ -2675,7 +2688,10 @@
           display.hidden = true;
           const tube = document.getElementById('tube');
           if (tube) {
-            tube.setAttribute('material', 'shader: flat; src: #view; side: back; npot: true');
+            tube.setAttribute(
+              'material',
+              'shader: flat; src: #view; side: front; npot: true'
+            );
           }
           const enter = function () {
             if (sceneEl.enterVR) sceneEl.enterVR();
