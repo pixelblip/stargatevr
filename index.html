@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Stargate 42 — Voyage</title>
+  <title>Stargate 43 — Voyage</title>
   <script src="https://aframe.io/releases/1.5.0/aframe.min.js"></script>
   <style>
     html, body { margin: 0; height: 100%; overflow: hidden; background: #000; }
@@ -36,8 +36,9 @@
       background: #000; object-fit: contain;
     }
     #display[hidden] { display: none; }
-    /* Offscreen scan buffer */
-    #view { position: absolute; left: -9999px; top: 0; }
+    /* Scan buffer — keep real pixel size for VR texture upload */
+    #view { position: fixed; left: 0; top: 0; width: 1280px; height: 720px;
+      opacity: 0; pointer-events: none; z-index: 0; }
     #scene {
       position: fixed; inset: 0; z-index: 4;
       opacity: 0; pointer-events: none;
@@ -73,7 +74,7 @@
 <body>
   <div id="gate">
     <h1>Enter the Star Gate</h1>
-    <p class="sub">stargate42 · VR tunnel facing forward</p>
+    <p class="sub">stargate43 · VR upright tunnel (not sideways)</p>
     <div class="btns">
       <button type="button" id="btnFlat">Enter<small>fullscreen tunnel</small></button>
       <button type="button" id="btnSbs">3D<small>depth tunnel · SBS</small></button>
@@ -96,38 +97,49 @@
       <canvas id="view" width="1280" height="720"></canvas>
     </a-assets>
 
+    <!--
+      Upright cylinder (default Y-axis). Camera sits inside and looks horizontally.
+      NEVER use rotation 0 0 90 — that lays the tube on its side and the
+      tunnel becomes a flat horizontal band.
+      rotation Y ≈ 90 aligns the canvas centre (vanishing point) ahead (−Z).
+    -->
+    <a-entity
+      id="tube"
+      geometry="primitive: cylinder; radius: 4.5; height: 12; segmentsRadial: 64; openEnded: true"
+      material="shader: flat; src: #view; side: back; npot: true"
+      position="0 1.5 0"
+      rotation="0 90 0"
+    ></a-entity>
+
     <a-entity id="rig" position="0 1.5 0">
       <a-camera
         id="cam"
         look-controls="enabled: true; pointerLockEnabled: false"
         wasd-controls="enabled: false"
-        fov="95"
+        fov="100"
         near="0.05"
         far="80"
-      >
-        <!-- Screen locked to the headset so the voyage always faces forward
-             (cylinder-on-X was showing the tunnel sideways / mirrored). -->
-        <a-entity
-          id="tube"
-          geometry="primitive: plane; width: 16; height: 9"
-          material="shader: flat; src: #view; side: front; npot: true"
-          position="0 0 -5.5"
-        ></a-entity>
-      </a-camera>
+      ></a-camera>
     </a-entity>
 
-    <!-- Soft dark surround so edges don't float in void -->
+    <!-- Cap the open ends so you don't stare into empty void up/down -->
     <a-entity
-      id="vr-shell"
-      geometry="primitive: sphere; radius: 40"
-      material="shader: flat; color: #000; side: back"
-      position="0 1.5 0"
+      id="vr-cap-top"
+      geometry="primitive: cylinder; radius: 4.55; height: 0.08; segmentsRadial: 32"
+      material="shader: flat; color: #000; side: double"
+      position="0 7.5 0"
+    ></a-entity>
+    <a-entity
+      id="vr-cap-bot"
+      geometry="primitive: cylinder; radius: 4.55; height: 0.08; segmentsRadial: 32"
+      material="shader: flat; color: #000; side: double"
+      position="0 -4.5 0"
     ></a-entity>
   </a-scene>
 
   <script>
     /**
-     * stargate42 — more weird outward effects (forks, ribbons, wall glyphs,
+     * stargate43 — more weird outward effects (forks, ribbons, wall glyphs,
      * art slits) still dim and born outside the void.
      */
     (function () {
@@ -440,11 +452,6 @@
         const mesh = tube.getObject3D('mesh');
         if (mesh && mesh.material && mesh.material.map) {
           mesh.material.map.needsUpdate = true;
-          // Keep orientation stable (no accidental flip from A-Frame)
-          if (mesh.material.map.flipY !== true) {
-            mesh.material.map.flipY = true;
-            mesh.material.map.needsUpdate = true;
-          }
         }
       }
 
@@ -2688,9 +2695,15 @@
           display.hidden = true;
           const tube = document.getElementById('tube');
           if (tube) {
+            // side:back = interior of upright cylinder; keep Y rotation so VP is ahead
             tube.setAttribute(
               'material',
-              'shader: flat; src: #view; side: front; npot: true'
+              'shader: flat; src: #view; side: back; npot: true'
+            );
+            tube.setAttribute('rotation', '0 90 0');
+            tube.setAttribute(
+              'geometry',
+              'primitive: cylinder; radius: 4.5; height: 12; segmentsRadial: 64; openEnded: true'
             );
           }
           const enter = function () {
