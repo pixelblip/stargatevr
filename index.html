@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Stargate 45 — Voyage</title>
+  <title>Stargate 46 — Voyage</title>
   <script src="https://aframe.io/releases/1.5.0/aframe.min.js"></script>
   <style>
     html, body { margin: 0; height: 100%; overflow: hidden; background: #000; }
@@ -36,9 +36,15 @@
       background: #000; object-fit: contain;
     }
     #display[hidden] { display: none; }
-    /* Scan buffer — keep real pixel size for VR texture upload */
-    #view { position: fixed; left: 0; top: 0; width: 1280px; height: 720px;
-      opacity: 0; pointer-events: none; z-index: 0; }
+    /* Voyage canvas — real buffer size; A-Frame samples this as a live texture */
+    #view {
+      position: fixed; left: 0; top: 0; width: 1280px; height: 720px;
+      opacity: 0; pointer-events: none; z-index: 0;
+    }
+    /* While waiting for headset, still show the voyage on the flat display */
+    body.mode-vr #display { display: block !important; opacity: 0.001; }
+    body.mode-vr.vr-immersive #display { display: none !important; }
+
     #scene {
       position: fixed; inset: 0; z-index: 4;
       opacity: 0; pointer-events: none;
@@ -74,7 +80,7 @@
 <body>
   <div id="gate">
     <h1>Enter the Star Gate</h1>
-    <p class="sub">stargate45 · VR = same voyage as flat (screen ahead)</p>
+    <p class="sub">stargate46 · VR fixed (live texture + enter)</p>
     <div class="btns">
       <button type="button" id="btnFlat">Enter<small>fullscreen tunnel</small></button>
       <button type="button" id="btnSbs">3D<small>depth tunnel · SBS</small></button>
@@ -102,22 +108,22 @@
       headset. Wrapping that image on a cylinder always skewed the walls
       (horizontal bands / wrong tilt). This keeps left/right walls vertical.
     -->
-    <a-entity id="rig" position="0 1.5 0">
+    <a-entity id="rig" position="0 1.6 0">
       <a-camera
         id="cam"
-        look-controls="enabled: false"
+        look-controls="enabled: true; pointerLockEnabled: false"
         wasd-controls="enabled: false"
         fov="90"
         near="0.05"
         far="80"
       >
-        <a-entity
+        <a-plane
           id="tube"
-          geometry="primitive: plane; width: 20; height: 11.25"
-          material="shader: flat; src: #view; side: double; npot: true; transparent: false"
-          position="0 0 -6"
-          rotation="0 0 0"
-        ></a-entity>
+          width="16"
+          height="9"
+          position="0 0 -5"
+          material="shader: flat; src: #view; side: double; npot: true"
+        ></a-plane>
       </a-camera>
     </a-entity>
 
@@ -126,8 +132,8 @@
 
   <script>
     /**
-     * stargate45 — VR uses a headset-locked flat screen of the same voyage
-     * canvas (no cylinder wrap). Walls stay vertical like Enter / 3D modes.
+     * stargate46 — VR: live canvas texture each frame; safe enterVR with
+     * fallback so the voyage never freezes on a black frame.
      */
     (function () {
       const gate = document.getElementById('gate');
@@ -434,24 +440,55 @@
       }
 
       function pushTexture() {
-        const tube = document.getElementById('tube');
-        if (!tube) return;
-        const mesh = tube.getObject3D('mesh');
-        if (!mesh || !mesh.material) return;
-        const mat = mesh.material;
-        if (mat.map) {
-          // Exact flat-mode orientation — no UV rotation / roll
-          mat.map.rotation = 0;
-          mat.map.center.set(0, 0);
-          mat.map.offset.set(0, 0);
-          mat.map.repeat.set(1, 1);
-          mat.map.flipY = true;
-          mat.map.needsUpdate = true;
+        try {
+          const tube = document.getElementById('tube');
+          if (!tube) return;
+          const mesh = tube.getObject3D('mesh');
+          if (!mesh) return;
+          const mat = mesh.material;
+          if (!mat) return;
+          const map = Array.isArray(mat) ? (mat[0] && mat[0].map) : mat.map;
+          if (map) {
+            map.needsUpdate = true;
+          }
+        } catch (err) {
+          /* never let VR texture updates kill the voyage loop */
         }
-        // Keep the screen square-on in front of the eyes
-        mesh.rotation.set(0, 0, 0);
-        tube.object3D.position.set(0, 0, -6);
-        tube.object3D.rotation.set(0, 0, 0);
+      }
+
+      function enterVrSafe() {
+        const scene = document.getElementById('scene');
+        if (!scene) return;
+        const go = function () {
+          try {
+            const p = scene.enterVR && scene.enterVR();
+            if (p && typeof p.then === 'function') {
+              p.then(function () {
+                document.body.classList.add('vr-immersive');
+              }).catch(function (err) {
+                console.warn('enterVR failed — continuing magic-window / flat preview', err);
+                // Keep voyage visible on #display so it is not a frozen black frame
+                display.hidden = false;
+                document.body.classList.remove('vr-immersive');
+              });
+            }
+          } catch (err) {
+            console.warn('enterVR threw', err);
+            display.hidden = false;
+          }
+        };
+        if (scene.hasLoaded) setTimeout(go, 100);
+        else scene.addEventListener('loaded', function () { setTimeout(go, 100); }, { once: true });
+
+        // Also listen for successful XR session
+        scene.addEventListener('enter-vr', function () {
+          document.body.classList.add('vr-immersive');
+          display.hidden = true;
+        });
+        scene.addEventListener('exit-vr', function () {
+          document.body.classList.remove('vr-immersive');
+          if (presentMode === 'vr') display.hidden = false;
+        });
       }
 
       // Stretch one art column into a vertical slit, scrolling upward only
@@ -1773,7 +1810,8 @@
       }
 
       function presentToDisplay(srcCanvas, w, h) {
-        if (presentMode === 'vr' || presentMode === 'sbs') return;
+        if (presentMode === 'sbs') return;
+        if (presentMode === 'vr' && document.body.classList.contains('vr-immersive')) return;
         const dw = display.width;
         const dh = display.height;
         dctx.fillStyle = '#000';
@@ -1893,9 +1931,14 @@
 
         if (presentMode === 'sbs') {
           if (stereoSbs) stereoSbs.render();
+        } else if (presentMode === 'vr') {
+          // Keep flat canvas painting too until / unless immersive VR sticks
+          if (!document.body.classList.contains('vr-immersive')) {
+            presentToDisplay(view, w, h);
+          }
+          pushTexture();
         } else {
           presentToDisplay(view, w, h);
-          if (presentMode === 'vr') pushTexture();
         }
       }
 
@@ -2691,31 +2734,20 @@
         startStargateScore();
 
         if (presentMode === 'vr') {
-          display.hidden = true;
-          const rig = document.getElementById('rig');
-          if (rig) rig.setAttribute('rotation', '0 0 0');
+          // Show voyage immediately (not a black freeze) while XR starts
+          display.hidden = false;
+          document.body.classList.remove('vr-immersive');
           const tube = document.getElementById('tube');
           if (tube) {
-            tube.setAttribute(
-              'geometry',
-              'primitive: plane; width: 20; height: 11.25'
-            );
-            tube.setAttribute('position', '0 0 -6');
-            tube.setAttribute('rotation', '0 0 0');
-            tube.setAttribute(
-              'material',
-              'shader: flat; src: #view; side: double; npot: true'
-            );
+            tube.setAttribute('material', 'shader: flat; src: #view; side: double; npot: true');
+            tube.setAttribute('position', '0 0 -5');
           }
-          setTimeout(pushTexture, 100);
-          setTimeout(pushTexture, 500);
-          const enter = function () {
-            if (sceneEl.enterVR) sceneEl.enterVR();
-          };
-          if (sceneEl.hasLoaded) setTimeout(enter, 500);
-          else sceneEl.addEventListener('loaded', function () { setTimeout(enter, 500); });
+          setTimeout(pushTexture, 50);
+          setTimeout(pushTexture, 300);
+          enterVrSafe();
         } else {
           display.hidden = false;
+          document.body.classList.remove('vr-immersive');
           if (document.documentElement.requestFullscreen) {
             document.documentElement.requestFullscreen().catch(function () {});
           }
